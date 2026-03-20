@@ -35,8 +35,7 @@
 
         <a href="#" class="forgot">¿Olvidó su contraseña?</a>
 
-        <button class="login-btn">Iniciar sesión</button>
-
+        <button type="button" class="login-btn" id="btnLogin">Iniciar sesión</button>
     </form>
 
     <div class="footer">
@@ -46,3 +45,9 @@
 </div>
 </body>
 </html>
+
+<script>
+    document.getElementById('btnLogin').onclick = function() {
+      window.location.href = "./FirstView/dashboard.html";
+    };
+</script>

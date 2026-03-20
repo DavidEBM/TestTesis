@@ -13,12 +13,14 @@
 
         background:linear-gradient(135deg,#1b1b1b,#350000,#000000);
         
-        height:100vh;
+        min-height:100vh;
         
         overflow-y:auto;
         overflow-x:hidden;
         
         color:white;
+
+        background-attachment: fixed;
         
         }
         
@@ -507,19 +509,19 @@
     
     .alert.red{
     
-    background:#6b0000;
-    
+    background: #e06c71;;
+        
     }
     
     .alert.yellow{
     
-    background:#7a5a00;
+    background: #ebb619;;
     
     }
     
     .alert.green{
     
-    background:#005a2f;
+    background: #8eb694;;
     
     }
     
