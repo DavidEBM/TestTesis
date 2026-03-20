@@ -13,7 +13,7 @@ leftToggle.addEventListener("click", () => {
     }
     
     })
-    
+
     rightToggle.addEventListener("click", () => {
     
     if(rightPanel.style.right === "0px"){
