@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Foxcat World Dashboard</title>
+
+<link rel="stylesheet" href="dashboard.css">
+
+</head>
+
+<body>
+
+<!-- BARRA SUPERIOR -->
+
+<header class="topbar">
+
+<div class="menu-icon" onclick="toggleMainMenu()">☰</div>
+
+<div class="system-title">
+Foxcat Medical Dashboard
+</div>
+
+<div class="user-area">
+
+<img src="profile.png" class="profile" onclick="toggleUserMenu()">
+
+<div class="user-menu" id="userMenu">
+<div>More info</div>
+<div>Call a technician</div>
+<div>Log out</div>
+</div>
+
+</div>
+
+</header>
+
+
+<!-- PANEL IZQUIERDO -->
+
+<aside class="left-panel" id="leftPanel">
+
+<h3>Medical</h3>
+
+<ul>
+<li>Pacientes crónicos</li>
+<li>Laboratorios</li>
+<li>Historia clínica</li>
+<li>Diagnósticos</li>
+<li>Urgencias</li>
+<li>Hospitalización</li>
+</ul>
+
+</aside>
+
+<div class="left-toggle" id="leftToggle">
+<div class="handle"></div>
+</div>
+
+
+<!-- PANEL DERECHO -->
+
+<aside class="right-panel" id="rightPanel">
+
+<h3>Usuario</h3>
+
+<ul>
+<li>Perfil</li>
+<li>Configuración</li>
+<li>Preferencias</li>
+<li>Notificaciones</li>
+<li>Seguridad</li>
+</ul>
+
+</aside>
+
+<div class="right-toggle" id="rightToggle">
+<div class="handle"></div>
+</div>
+
+
+<!-- MENU SUPERIOR -->
+
+<div class="main-menu" id="mainMenu">
+
+<ul>
+<li>Marcar turno</li>
+<li>Descanso</li>
+<li>Ubicación hospital</li>
+<li>Asistencia cirugía</li>
+<li>Calendario</li>
+</ul>
+
+</div>
+
+<main class="dashboard">
+
+    <!-- PACIENTE PRINCIPAL -->
+    
+    <div class="widget patient-main">
+    
+    <h3>Paciente Actual</h3>
+    
+    <b>Nombre:</b> Carlos Ramirez<br>
+    <b>Edad:</b> 67<br>
+    <b>Condición:</b> Diabetes Tipo II<br>
+    <b>Estado:</b> <span style="color:#ff4b4b">Riesgo moderado</span>
+    
+    <br><br>
+    
+    <h4>Signos vitales</h4>
+    
+    Presión: 140 / 90<br>
+    Pulso: 88 bpm<br>
+    Glucosa: 210 mg/dL
+    
+    <br>
+    
+    <button>Ver Historia Clínica</button>
+    
+    </div>
+    
+    
+    <!-- ALERTAS -->
+    
+    <div class="widget">
+    
+    <h3>Alertas clínicas</h3>
+    
+    <div class="alert red">
+    Paciente 245 — Hiperglucemia
+    </div>
+    
+    <div class="alert yellow">
+    Paciente 120 — Control pendiente
+    </div>
+    
+    <div class="alert green">
+    Paciente 051 — Estable
+    </div>
+    
+    </div>
+    
+    
+    <!-- AGENDA -->
+    
+    <div class="widget">
+    
+    <h3>Agenda del día</h3>
+    
+    <div class="appointment">
+    <span>08:30</span>
+    <span>Consulta</span>
+    </div>
+    
+    <div class="appointment">
+    <span>10:00</span>
+    <span>Laboratorio</span>
+    </div>
+    
+    <div class="appointment">
+    <span>11:30</span>
+    <span>Control crónico</span>
+    </div>
+    
+    <div class="appointment">
+    <span>14:00</span>
+    <span>Interconsulta</span>
+    </div>
+    
+    </div>
+    
+    
+    <!-- LABORATORIOS -->
+    
+    <div class="widget">
+    
+    <h3>Laboratorios recientes</h3>
+    
+    Paciente 245 — Glucosa alta<br>
+    Paciente 199 — Hemoglobina baja<br>
+    Paciente 320 — Creatinina alta
+    
+    </div>
+    
+    
+    <!-- PACIENTES CRITICOS -->
+    
+    <div class="widget">
+    
+    <h3>Pacientes críticos</h3>
+    
+    <div class="patient-row">
+    <span>Ramirez C.</span>
+    <span style="color:red">Crítico</span>
+    </div>
+    
+    <div class="patient-row">
+    <span>Gomez L.</span>
+    <span style="color:orange">Riesgo</span>
+    </div>
+    
+    <div class="patient-row">
+    <span>Vargas P.</span>
+    <span style="color:lime">Estable</span>
+    </div>
+    
+    </div>
+    
+    
+    <!-- MAPA HOSPITAL -->
+    
+    <div class="widget">
+    
+    <h3>Ubicación paciente</h3>
+    
+    <div class="map">
+    
+    Mapa hospital (placeholder)
+    
+    </div>
+    
+    </div>
+    
+    
+    <!-- NOTAS MEDICAS -->
+    
+    <div class="widget notes">
+    
+    <h3>Notas médicas rápidas</h3>
+    
+    <textarea placeholder="Escribe observaciones del paciente..."></textarea>
+    
+    <button>Guardar nota</button>
+    
+    </div>
+    
+    </main>
+<script src="dashboard.js"></script>
+
+</body>
+</html>

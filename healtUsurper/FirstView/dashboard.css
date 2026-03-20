@@ -1,0 +1,662 @@
+/* RESET */
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family:Segoe UI, Arial, sans-serif;
+    }
+    
+    /* BODY */
+    
+    body{
+
+        background:linear-gradient(135deg,#1b1b1b,#350000,#000000);
+        
+        height:100vh;
+        
+        overflow-y:auto;
+        overflow-x:hidden;
+        
+        color:white;
+        
+        }
+        
+        /* ocultar scrollbar pero permitir scroll */
+        
+        body::-webkit-scrollbar{
+        width:0px;
+        }
+        
+        body{
+        scrollbar-width:none;
+        }
+    
+    /* TOPBAR */
+    
+    .topbar{
+
+        height:60px;
+        
+        background:#0b0b0b;
+        
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        
+        padding:0 25px;
+        
+        border-bottom:2px solid #b00020;
+        
+        position:fixed;
+        
+        top:0;
+        width:100%;
+        
+        z-index:50;
+        
+        }
+    
+    /* MENU ICON */
+    
+    .menu-icon{
+    
+    font-size:22px;
+    
+    cursor:pointer;
+    
+    color:white;
+    
+    }
+    
+    /* TITULO */
+    
+    .system-title{
+    
+    font-weight:600;
+    
+    font-size:18px;
+    
+    color:#ff4b4b;
+    
+    letter-spacing:1px;
+    
+    }
+    
+    /* USER AREA */
+    
+    .user-area{
+    
+    position:relative;
+    
+    }
+    
+    /* FOTO PERFIL */
+    
+    .profile{
+    
+    width:36px;
+    height:36px;
+    
+    border-radius:50%;
+    
+    cursor:pointer;
+    
+    object-fit:cover;
+    
+    }
+    
+    /* USER MENU */
+    
+    .user-menu{
+    
+    position:absolute;
+    
+    top:50px;
+    
+    right:0;
+    
+    background:#111;
+    
+    border:1px solid #333;
+    
+    border-radius:8px;
+    
+    display:none;
+    
+    min-width:160px;
+    
+    z-index:50;
+    
+    box-shadow:0 0 10px rgba(0,0,0,0.6);
+    
+    }
+    
+    .user-menu div{
+    
+    padding:10px 14px;
+    
+    font-size:13px;
+    
+    cursor:pointer;
+    
+    }
+    
+    .user-menu div:hover{
+    
+    background:#1f1f1f;
+    
+    }
+    
+    
+    /* ------------------- */
+    /* LEFT PANEL */
+    /* ------------------- */
+    
+    .left-panel{
+
+        position:fixed;
+        
+        top:0;
+        
+        left:-260px;
+        
+        width:260px;
+        
+        height:100vh;
+        
+        background:#0f0f0f;
+        
+        border-right:2px solid #b00020;
+        
+        padding:80px 20px 20px 20px;
+        
+        transition:0.3s;
+        
+        z-index:90;
+        
+        overflow-y:auto;
+        
+        }
+    
+    .left-panel h3{
+    
+    margin-bottom:10px;
+    
+    color:#ff4b4b;
+    
+    }
+    
+    .left-panel ul{
+    
+    list-style:none;
+    
+    }
+    
+    .left-panel li{
+    
+    padding:10px 5px;
+    
+    border-bottom:1px solid #333;
+    
+    cursor:pointer;
+    
+    font-size:14px;
+    
+    }
+    
+    .left-panel li:hover{
+    
+    color:#ff4b4b;
+    
+    }
+    
+    
+    /* HANDLE IZQUIERDA */
+    
+    .left-toggle{
+
+        position:fixed;
+        
+        top:0;
+        
+        left:0;
+        
+        width:20px;
+        
+        height:100vh;
+        
+        background:#1c1c1c;
+        
+        display:flex;
+        
+        align-items:center;
+        
+        justify-content:center;
+        
+        cursor:pointer;
+        
+        z-index:95;
+        
+        }
+        
+        /* handle centrado */
+        
+        .left-toggle .handle{
+        
+        width:6px;
+        
+        height:40px;
+        
+        background:#999;
+        
+        border-radius:4px;
+        
+        }
+    
+    
+    /* ------------------- */
+    /* RIGHT PANEL */
+    /* ------------------- */
+    
+    .right-panel{
+
+        position:fixed;
+        
+        top:0;
+        
+        right:-260px;
+        
+        width:260px;
+        
+        height:100vh;
+        
+        background:#0f0f0f;
+        
+        border-left:2px solid #b00020;
+        
+        padding:80px 20px 20px 20px;
+        
+        transition:0.3s;
+        
+        z-index:90;
+        
+        overflow-y:auto;
+        
+        }
+    
+    .right-panel h3{
+    
+    margin-bottom:10px;
+    
+    color:#ff4b4b;
+    
+    }
+    
+    .right-panel ul{
+    
+    list-style:none;
+    
+    }
+    
+    .right-panel li{
+    
+    padding:10px 5px;
+    
+    border-bottom:1px solid #333;
+    
+    cursor:pointer;
+    
+    font-size:14px;
+    
+    }
+    
+    .right-panel li:hover{
+    
+    color:#ff4b4b;
+    
+    }
+    
+    
+    /* HANDLE DERECHA */
+    
+    .right-toggle{
+
+        position:fixed;
+        
+        top:0;
+        
+        right:0;
+        
+        width:20px;
+        
+        height:100vh;
+        
+        background:#1c1c1c;
+        
+        display:flex;
+        
+        align-items:center;
+        
+        justify-content:center;
+        
+        cursor:pointer;
+        
+        z-index:95;
+        
+        }
+        
+        .right-toggle .handle{
+        
+        width:6px;
+        
+        height:40px;
+        
+        background:#999;
+        
+        border-radius:4px;
+        
+        }
+    
+    
+    /* ------------------- */
+    /* MAIN MENU */
+    /* ------------------- */
+    
+    .main-menu{
+    
+    position:fixed;
+    
+    top:60px;
+    
+    left:0;
+    
+    width:100%;
+    
+    background:#0e0e0e;
+    
+    border-bottom:2px solid #b00020;
+    
+    display:none;
+    
+    z-index:80;
+    
+    }
+    
+    .main-menu ul{
+    
+    display:flex;
+    
+    gap:20px;
+    
+    padding:15px 25px;
+    
+    list-style:none;
+    
+    }
+    
+    .main-menu li{
+    
+    cursor:pointer;
+    
+    font-size:14px;
+    
+    }
+    
+    .main-menu li:hover{
+    
+    color:#ff4b4b;
+    
+    }
+    
+    
+    /* ------------------- */
+    /* DASHBOARD */
+    /* ------------------- */
+    
+    .dashboard{
+
+        max-width:1400px;
+        
+        margin:auto;
+        
+        margin-top:110px;
+        
+        padding-bottom:80px;
+        
+        display:grid;
+        
+        grid-template-columns:2fr 1fr 1fr;
+        
+        grid-template-rows:auto auto auto;
+        
+        gap:20px;
+        
+        padding-left:25px;
+        padding-right:25px;
+        
+        }
+    
+    
+    /* WIDGET */
+    
+    .widget{
+    
+    background:#111;
+    
+    border-radius:12px;
+    
+    padding:18px;
+    
+    box-shadow:0 0 10px rgba(0,0,0,0.6);
+    
+    transition:0.25s;
+    
+    border:1px solid #2c2c2c;
+    
+    }
+    
+    .widget:hover{
+    
+    transform:scale(1.02);
+    
+    box-shadow:0 0 18px rgba(255,0,0,0.3);
+    
+    }
+    
+    
+    /* TITULOS */
+    
+    .widget h3{
+    
+    font-size:15px;
+    
+    color:#ddd;
+    
+    margin-bottom:10px;
+    
+    }
+    
+    
+    /* PACIENTE PRINCIPAL */
+    
+    .patient-main{
+    
+    grid-column:1/3;
+    
+    background:linear-gradient(145deg,#1a1a1a,#000);
+    
+    border-left:4px solid #ff0033;
+    
+    }
+    
+    
+    /* ALERTAS */
+    
+    .alert{
+    
+    padding:8px;
+    
+    border-radius:6px;
+    
+    margin-bottom:6px;
+    
+    font-size:13px;
+    
+    }
+    
+    .alert.red{
+    
+    background:#6b0000;
+    
+    }
+    
+    .alert.yellow{
+    
+    background:#7a5a00;
+    
+    }
+    
+    .alert.green{
+    
+    background:#005a2f;
+    
+    }
+    
+    
+    /* AGENDA */
+    
+    .appointment{
+    
+    display:flex;
+    
+    justify-content:space-between;
+    
+    font-size:13px;
+    
+    padding:6px 0;
+    
+    border-bottom:1px solid #333;
+    
+    }
+    
+    
+    /* PACIENTES CRITICOS */
+    
+    .patient-row{
+    
+    display:flex;
+    
+    justify-content:space-between;
+    
+    padding:8px 0;
+    
+    font-size:13px;
+    
+    border-bottom:1px solid #333;
+    
+    }
+    
+    
+    /* MAPA */
+    
+    .map{
+    
+    height:150px;
+    
+    background:#222;
+    
+    border-radius:6px;
+    
+    display:flex;
+    
+    align-items:center;
+    
+    justify-content:center;
+    
+    color:#777;
+    
+    font-size:12px;
+    
+    }
+    
+    
+    /* NOTAS */
+    
+    .notes textarea{
+    
+    width:100%;
+    
+    height:120px;
+    
+    background:#0d0d0d;
+    
+    border:none;
+    
+    border-radius:6px;
+    
+    color:white;
+    
+    padding:10px;
+    
+    resize:none;
+    
+    margin-top:10px;
+    
+    }
+    
+    
+    /* BOTONES */
+    
+    button{
+    
+    background:#b00020;
+    
+    border:none;
+    
+    padding:8px 14px;
+    
+    border-radius:6px;
+    
+    color:white;
+    
+    cursor:pointer;
+    
+    margin-top:12px;
+    
+    transition:0.2s;
+    
+    }
+    
+    button:hover{
+    
+    background:#ff0033;
+    
+    }
+    
+    
+    /* SCROLLBAR */
+    
+    .dashboard::-webkit-scrollbar{
+    
+    width:8px;
+    
+    }
+    
+    .dashboard::-webkit-scrollbar-thumb{
+    
+    background:#b00020;
+    
+    border-radius:10px;
+    
+    }
+    
+    .dashboard::-webkit-scrollbar-track{
+    
+    background:#111;
+    
+    }
+
+    .left-panel,.right-panel{
+        box-shadow:0 0 20px rgba(0,0,0,0.8);
+    }
