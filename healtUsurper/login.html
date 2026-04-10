@@ -1,53 +1,62 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>Foxcat World S.A.S - Login</title>
-
-<link rel="stylesheet" href="styles.css">
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Foxcat World S.A.S - Login</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
+  <main class="login-page">
+    <section class="hero-panel">
+      <span class="eyebrow">Foxcat Medical</span>
+      <button type="button" id="themeToggleButton" class="theme-toggle">Modo oscuro</button>
+      <h1>Un acceso mas amable, visual y listo para pacientes reales.</h1>
+      <p>
+        Ingresa o crea usuarios solo con correo y contrasena. La foto del medico se gestiona luego en el dashboard.
+      </p>
+      <div class="hero-swatches">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </section>
 
-<div class="login-container">
+    <section class="login-container">
+      <img src="logo.png" class="logo" alt="Logo Foxcat">
 
-    <img src="logo.png" class="logo">
-
-    <div class="company">
+      <div class="company">
         Foxcat World S.A.S
-    </div>
+      </div>
 
-    <form>
-
+      <form id="authForm">
         <div class="input-group">
-            <i class="fa fa-user"></i>
-            <input type="text" placeholder="Nombre de usuario" required>
+          <input type="email" id="email" placeholder="Correo del usuario" required>
         </div>
 
         <div class="input-group">
-            <i class="fa fa-lock"></i>
-            <input type="password" placeholder="Contraseña" required>
+          <input type="password" id="password" placeholder="Contrasena" required>
         </div>
 
-        <a href="#" class="forgot">¿Olvidó su contraseña?</a>
+        <div id="authStatus" class="auth-status" data-state="info">
+          Usa Email/Password de Firebase. La foto del medico se carga despues desde el menu superior del dashboard.
+        </div>
 
-        <button type="button" class="login-btn" id="btnLogin">Iniciar sesión</button>
-    </form>
+        <a href="#" class="forgot">Recuerda habilitar Email/Password y localhost en Firebase</a>
 
-    <div class="footer">
-        © 2026 Foxcat World S.A.S — Todos los derechos reservados
-    </div>
+        <div class="actions">
+          <button type="submit" class="login-btn" id="btnLogin">Iniciar sesion</button>
+          <button type="button" class="secondary-btn" id="btnRegister">Crear usuario</button>
+        </div>
+      </form>
 
-</div>
+      <div class="footer">
+        2026 Foxcat World S.A.S - Todos los derechos reservados
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="login.js"></script>
 </body>
 </html>
-
-<script>
-    document.getElementById('btnLogin').onclick = function() {
-      window.location.href = "./FirstView/dashboard.html";
-    };
-</script>
