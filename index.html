@@ -2,70 +2,60 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Foxcat AI Boot</title>
 
 <style>
-
 *{
 margin:0;
 padding:0;
 box-sizing:border-box;
-font-family: "Segoe UI", monospace;
+font-family:"Trebuchet MS","Segoe UI",sans-serif;
 }
 
 body{
-
 height:100vh;
 display:flex;
 justify-content:center;
 align-items:center;
-background: radial-gradient(circle at center,#7a0000,#2a0000,#000000);
-color:white;
+background:
+radial-gradient(circle at top left, rgba(248,214,227,0.95), transparent 30%),
+radial-gradient(circle at bottom right, rgba(216,230,255,0.92), transparent 34%),
+linear-gradient(180deg,#fffdfd 0%,#f7f1f6 52%,#fdf8f2 100%);
+color:#5f667a;
 overflow:hidden;
-
 }
-
-/* partículas */
 
 .particle{
 position:absolute;
-width:3px;
-height:3px;
-background:rgba(255,0,0,0.3);
+width:6px;
+height:6px;
+background:rgba(232,169,193,0.35);
 border-radius:50%;
-animation:float 10s linear infinite;
+animation:float 11s linear infinite;
 }
 
 @keyframes float{
-
 from{
 transform:translateY(100vh);
 opacity:0;
 }
-
 20%{opacity:1}
-
 to{
 transform:translateY(-10vh);
 opacity:0;
 }
-
 }
-
-/* contenedor */
 
 .container{
-
-width:520px;
-background:rgba(0,0,0,0.65);
-border-radius:12px;
+width:min(560px, calc(100vw - 28px));
+background:rgba(255,255,255,0.82);
+backdrop-filter:blur(14px);
+border-radius:28px;
 padding:40px;
-border:1px solid rgba(255,0,0,0.25);
-box-shadow:0 0 25px rgba(255,0,0,0.3);
-
+border:1px solid rgba(225,206,221,0.95);
+box-shadow:0 24px 55px rgba(160,145,180,0.18);
 }
-
-/* logo */
 
 .logo{
 text-align:center;
@@ -75,95 +65,71 @@ margin-bottom:15px;
 .logo img{
 width:90px;
 height:auto;
-filter: drop-shadow(0 0 10px rgba(212,175,55,0.6));
+filter: drop-shadow(0 10px 18px rgba(196, 177, 213, 0.35));
 }
 
 .title{
-
 text-align:center;
 font-size:20px;
 letter-spacing:2px;
 margin-bottom:30px;
-
+color:#69718a;
 }
 
-/* terminal */
-
 .terminal{
-
-height:150px;
-background:#050505;
-border-radius:8px;
-padding:15px;
+height:170px;
+background:rgba(250,247,252,0.94);
+border-radius:18px;
+padding:16px;
 font-size:13px;
-color:#9ef59e;
+color:#708190;
 overflow:hidden;
-
+border:1px solid rgba(226,216,235,0.95);
 }
 
 .line{
-
 opacity:0;
 animation:fadeIn 0.5s forwards;
-
 }
 
 @keyframes fadeIn{
-
 to{opacity:1}
-
 }
 
-/* barra progreso */
-
 .progress-container{
-
 margin-top:25px;
-
 }
 
 .progress-box{
-
 height:16px;
-background:#111;
+background:#f2edf5;
 border-radius:20px;
 overflow:hidden;
-border:1px solid rgba(255,0,0,0.3);
-
+border:1px solid rgba(224,210,225,0.95);
 }
 
 .progress{
-
 height:100%;
 width:0%;
-background:linear-gradient(90deg,#d4af37,#f1d27a);
+background:linear-gradient(90deg,#f0c8d8,#d8e6ff,#d8f0e1);
 transition:width 0.2s;
-
 }
 
 .percent{
-
 text-align:right;
 font-size:12px;
 margin-top:5px;
-color:#bbb;
-
+color:#9499a8;
 }
-
-/* estado */
 
 .status{
-
 margin-top:10px;
 font-size:13px;
-color:#ccc;
+color:#8d93a3;
 text-align:center;
 letter-spacing:1px;
-
 }
-
 </style>
-
 </head>
 
 <body>
@@ -171,123 +137,88 @@ letter-spacing:1px;
 <div id="particles"></div>
 
 <div class="container">
+  <div class="logo">
+    <img src="healtUsurper/logo.png" alt="Foxcat Logo">
+  </div>
+  <div class="title">FOXCAT MEDICAL AI</div>
 
-<div class="logo">
-    <img src="healtUsurper\logo.png" alt="Foxcat Logo">
-</div>
-<div class="title">FOXCAT MEDICAL AI</div>
+  <div class="terminal" id="terminal"></div>
 
-<div class="terminal" id="terminal"></div>
+  <div class="progress-container">
+    <div class="progress-box">
+      <div class="progress" id="progress"></div>
+    </div>
+    <div class="percent" id="percent">0%</div>
+  </div>
 
-<div class="progress-container">
-
-<div class="progress-box">
-<div class="progress" id="progress"></div>
-</div>
-
-<div class="percent" id="percent">0%</div>
-
-</div>
-
-<div class="status" id="status">
-AI Medical System Booting...
-</div>
-
+  <div class="status" id="status">
+    AI Medical System Booting...
+  </div>
 </div>
 
 <script>
-
-/* partículas */
-
 for(let i=0;i<35;i++){
-
-let p=document.createElement("div");
-p.className="particle";
-p.style.left=Math.random()*100+"%";
-p.style.animationDuration=(5+Math.random()*10)+"s";
-document.body.appendChild(p);
-
+  const p=document.createElement("div");
+  p.className="particle";
+  p.style.left=Math.random()*100+"%";
+  p.style.animationDuration=(5+Math.random()*10)+"s";
+  document.body.appendChild(p);
 }
-
-/* mensajes de boot */
 
 const steps=[
+  "Initializing Foxcat Kernel...",
+  "Loading Medical AI Modules...",
+  "Connecting Hospital Database...",
+  "Verifying Patient Encryption Keys...",
+  "Loading Clinical Prediction Engine...",
+  "Synchronizing Medical Records...",
+  "Initializing Triage Analysis AI...",
+  "Starting Monitoring Services...",
+  "Running Diagnostic Protocols...",
+  "System Integrity Check...",
+  "Preparing Medical Dashboard..."
+];
 
-"Initializing Foxcat Kernel...",
-"Loading Medical AI Modules...",
-"Connecting Hospital Database...",
-"Verifying Patient Encryption Keys...",
-"Loading Clinical Prediction Engine...",
-"Synchronizing Medical Records...",
-"Initializing Triage Analysis AI...",
-"Starting Monitoring Services...",
-"Running Diagnostic Protocols...",
-"System Integrity Check...",
-"Preparing Medical Dashboard..."
-
-]
-
-const terminal=document.getElementById("terminal")
-
-let stepIndex=0
+const terminal=document.getElementById("terminal");
+let stepIndex=0;
 
 function addLine(text){
-
-let line=document.createElement("div")
-line.className="line"
-line.textContent="> "+text
-
-terminal.appendChild(line)
-
-terminal.scrollTop=terminal.scrollHeight
-
+  const line=document.createElement("div");
+  line.className="line";
+  line.textContent="> "+text;
+  terminal.appendChild(line);
+  terminal.scrollTop=terminal.scrollHeight;
 }
 
-/* progreso */
+const min=5000;
+const max=15000;
+const total=Math.random()*(max-min)+min;
+const interval=total/100;
+let progress=0;
 
-const min=5000
-const max=15000
-
-const total=Math.random()*(max-min)+min
-
-const interval=total/100
-
-let progress=0
-
-const bar=document.getElementById("progress")
-const percent=document.getElementById("percent")
-const status=document.getElementById("status")
+const bar=document.getElementById("progress");
+const percent=document.getElementById("percent");
+const status=document.getElementById("status");
 
 const loader=setInterval(()=>{
+  progress++;
+  bar.style.width=progress+"%";
+  percent.textContent=progress+"%";
 
-progress++
+  if(progress%10===0 && stepIndex<steps.length){
+    addLine(steps[stepIndex]);
+    stepIndex++;
+  }
 
-bar.style.width=progress+"%"
-percent.textContent=progress+"%"
+  if(progress>=100){
+    clearInterval(loader);
+    status.textContent="System Ready";
 
-if(progress%10===0 && stepIndex<steps.length){
-
-addLine(steps[stepIndex])
-stepIndex++
-
-}
-
-if(progress>=100){
-
-clearInterval(loader)
-
-status.textContent="System Ready"
-
-setTimeout(()=>{
-
-window.location.href="healtUsurper/login.html"
-
-},800)
-
-}
-
-},interval)
-
+    setTimeout(()=>{
+      window.location.href="healtUsurper/login.html";
+    },800);
+  }
+},interval);
 </script>
 
 </body>

@@ -9,19 +9,32 @@
 </head>
 <body>
   <header class="topbar">
-    <button type="button" class="menu-icon" onclick="toggleMainMenu()" aria-label="Abrir menu">&#9776;</button>
-    <div class="brand-block">
-      <span class="eyebrow">Cuidado clinico conectado</span>
-      <h1 class="system-title">Foxcat Medical Dashboard</h1>
+    <div class="topbar-left">
+      <button type="button" class="menu-icon" onclick="toggleMainMenu()" aria-label="Abrir menu principal">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
     </div>
-    <div class="doctor-chip" onclick="toggleUserMenu()">
-      <img id="doctorPhoto" class="profile" src="profile.png" alt="Foto del medico">
-      <div class="doctor-chip-copy">
-        <strong id="doctorChipName">Cargando medico...</strong>
-        <span id="doctorChipRole">Sesion segura con Firebase</span>
+
+    <div class="topbar-center">
+      <div class="brand-block">
+        <span class="eyebrow">Cuidado clinico conectado</span>
+        <h1 class="system-title">Foxcat Medical Dashboard</h1>
       </div>
     </div>
-    <button type="button" id="themeToggleButton" class="theme-toggle">Modo oscuro</button>
+
+    <div class="topbar-right">
+      <button type="button" id="themeToggleButton" class="theme-toggle">Modo oscuro</button>
+      <button type="button" class="doctor-chip" onclick="toggleUserMenu()" aria-label="Abrir menu del medico">
+        <img id="doctorPhoto" class="profile" src="profile.png" alt="Foto del medico">
+        <div class="doctor-chip-copy">
+          <strong id="doctorChipName">Cargando medico...</strong>
+          <span id="doctorChipRole">Sesion segura con Firebase</span>
+        </div>
+      </button>
+    </div>
+
     <div class="user-menu" id="userMenu">
       <div class="user-menu-head">
         <img id="doctorMenuPhoto" class="menu-profile" src="profile.png" alt="Foto del medico">
@@ -39,13 +52,13 @@
 
   <aside class="left-panel" id="leftPanel">
     <h3>Accesos rapidos</h3>
-    <ul>
-      <li>Pacientes activos</li>
-      <li>Monitoreo remoto</li>
-      <li>Laboratorios</li>
-      <li>Notas del turno</li>
-      <li>Configuracion visual</li>
-      <li>Soporte</li>
+    <ul class="menu-list">
+      <li><button type="button" data-panel-target="active-patients">Pacientes activos</button></li>
+      <li><button type="button" data-panel-target="remote-monitoring">Monitoreo remoto</button></li>
+      <li><button type="button" data-panel-target="labs-overview">Laboratorios</button></li>
+      <li><button type="button" data-panel-target="shift-notes">Notas del turno</button></li>
+      <li><button type="button" data-panel-target="visual-settings">Configuracion visual</button></li>
+      <li><button type="button" data-panel-target="support-center">Soporte</button></li>
     </ul>
   </aside>
 
@@ -59,8 +72,8 @@
       <li id="doctorPanelName">Medico: cargando...</li>
       <li id="doctorPanelPatients">Pacientes registrados: 0</li>
       <li id="doctorPanelRisk">Pacientes en riesgo: 0</li>
+      <li id="doctorPanelTraining">Motor IA: calibrando dataset local...</li>
       <li>Menu contextual: clic derecho</li>
-      <li>Opcion 3: editar posiciones</li>
     </ul>
   </aside>
 
@@ -69,12 +82,12 @@
   </div>
 
   <div class="main-menu" id="mainMenu">
-    <ul>
-      <li>Marcar turno</li>
-      <li>Resumen del dia</li>
-      <li>Historial rapido</li>
-      <li>Asistencia quirurgica</li>
-      <li>Calendario</li>
+    <ul class="menu-list">
+      <li><button type="button" data-page-action="mark-shift">Marcar turno</button></li>
+      <li><button type="button" data-page-action="daily-summary">Resumen del dia</button></li>
+      <li><button type="button" data-page-action="quick-history">Historial rapido</button></li>
+      <li><button type="button" data-page-action="surgery-assist">Asistencia quirurgica</button></li>
+      <li><button type="button" data-page-action="calendar-view">Calendario</button></li>
     </ul>
   </div>
 
@@ -100,9 +113,33 @@
       </div>
     </section>
 
-    <main class="dashboard" id="dashboardGrid">
+    <section id="workspacePanel" class="workspace-panel" hidden>
+      <div class="workspace-panel-head">
+        <div>
+          <span class="eyebrow">Centro de acciones</span>
+          <h3 id="workspaceTitle">Vista auxiliar</h3>
+        </div>
+        <button type="button" id="closeWorkspaceButton" class="ghost-button">Cerrar</button>
+      </div>
+      <div id="workspaceBody" class="workspace-body"></div>
+    </section>
+
+    <section class="dashboard" id="dashboardGrid">
+      <div id="layoutGuide" class="layout-guide" aria-hidden="true"></div>
+
       <section class="widget widget-wide" data-widget-key="overview" draggable="false">
         <div id="patientOverview" class="widget-content"></div>
+      </section>
+
+      <section class="widget widget-ai" data-widget-key="medic-ai" draggable="false">
+        <div class="widget-head">
+          <div>
+            <h3>IA medica de apoyo</h3>
+            <span id="aiTrainingBadge" class="soft-badge">Calibrando dataset local...</span>
+          </div>
+          <span class="soft-badge">24h a 1+ mes</span>
+        </div>
+        <div id="medicAiWidget" class="medic-ai-widget"></div>
       </section>
 
       <section class="widget" data-widget-key="alerts" draggable="false">
@@ -143,28 +180,58 @@
               <option value="Riesgo">Riesgo</option>
               <option value="Critico">Critico</option>
             </select>
+            <select name="locationCity">
+              <option value="">Ciudad de seguimiento</option>
+              <option value="Barcelona">Barcelona</option>
+              <option value="Pasto-Narino">Pasto-Narino</option>
+              <option value="Cali">Cali</option>
+              <option value="Medellin">Medellin</option>
+              <option value="Ipiales">Ipiales</option>
+            </select>
             <label class="time-field upload-field" title="Sube una foto opcional del paciente para mostrarla en la ficha y en la lista.">
-              <span>P · Foto opcional del paciente</span>
+              <span>Foto opcional del paciente</span>
               <input type="file" name="photoFile" id="patientPhotoInput" accept="image/*">
             </label>
             <input type="number" name="bloodPressureSystolic" min="0" placeholder="Presion sistolica">
             <input type="number" name="bloodPressureDiastolic" min="0" placeholder="Presion diastolica">
             <input type="number" name="pulse" min="0" placeholder="Pulso bpm">
             <input type="number" name="glucose" min="0" placeholder="Glucosa mg/dL">
+            <input type="number" step="0.1" name="oxygenSaturation" min="0" max="100" placeholder="Saturacion O2 %">
+            <input type="number" name="respiratoryRate" min="0" placeholder="Frecuencia respiratoria">
             <input type="number" step="0.1" name="hemoglobin" min="0" placeholder="Hemoglobina g/dL">
             <input type="number" step="0.1" name="creatinine" min="0" placeholder="Creatinina mg/dL">
+            <input type="number" step="0.1" name="bmi" min="0" placeholder="IMC">
+            <select name="copdGold">
+              <option value="">COPD GOLD</option>
+              <option value="1">GOLD 1</option>
+              <option value="2">GOLD 2</option>
+              <option value="3">GOLD 3</option>
+              <option value="4">GOLD 4</option>
+            </select>
+            <select name="smokingStatus">
+              <option value="">Estado de tabaquismo</option>
+              <option value="Nunca">Nunca</option>
+              <option value="Exfumador">Exfumador</option>
+              <option value="Activo">Activo</option>
+              <option value="Alta carga">Alta carga</option>
+            </select>
+            <select name="heartFailureHistory">
+              <option value="">Antecedente de falla cardiaca</option>
+              <option value="No">No</option>
+              <option value="Si">Si</option>
+            </select>
             <input type="text" name="ward" placeholder="Area / servicio">
             <input type="text" name="room" placeholder="Habitacion / cama">
             <label class="time-field" title="Hora programada para la consulta o valoracion medica.">
-              <span>C · Hora de consulta</span>
+              <span>Hora de consulta</span>
               <input type="time" name="appointmentTime" aria-label="Hora de consulta">
             </label>
             <label class="time-field" title="Hora estimada para control o monitoreo de signos vitales.">
-              <span>M · Hora de monitoreo</span>
+              <span>Hora de monitoreo</span>
               <input type="time" name="monitoringTime" aria-label="Hora de monitoreo">
             </label>
             <label class="time-field" title="Hora prevista para muestra, resultado o revision de laboratorio.">
-              <span>L · Hora de laboratorio</span>
+              <span>Hora de laboratorio</span>
               <input type="time" name="labTime" aria-label="Hora de laboratorio">
             </label>
           </div>
@@ -204,7 +271,7 @@
         <textarea id="patientNotesInput" class="notes-input" placeholder="Selecciona un paciente para guardar notas clinicas"></textarea>
         <button type="button" id="saveNotesButton">Guardar nota del paciente</button>
       </section>
-    </main>
+    </section>
   </main>
 
   <script type="module" src="dashboard.js"></script>
