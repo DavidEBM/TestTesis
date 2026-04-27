@@ -33,6 +33,73 @@ const defaultWidgetOrder = [
   "notes",
 ];
 
+const widgetCatalog = {
+  overview: {
+    label: "Resumen del paciente",
+    description: "Ficha principal con signos y estado actual.",
+    shortcutDescription: "Ir al resumen general del paciente seleccionado.",
+  },
+  "medic-ai": {
+    label: "IA medica",
+    description: "Analisis de riesgo y recomendaciones asistidas.",
+    shortcutDescription: "Ir al widget de IA medica.",
+  },
+  alerts: {
+    label: "Alertas clinicas",
+    description: "Eventos de riesgo y prioridades del paciente.",
+    shortcutDescription: "Ir al widget de alertas clinicas.",
+  },
+  agenda: {
+    label: "Agenda del paciente",
+    description: "Consulta, monitoreo y laboratorio programados.",
+    shortcutDescription: "Ir al widget de agenda del paciente.",
+  },
+  status: {
+    label: "Estado del tablero",
+    description: "Resumen operacional del dashboard.",
+    shortcutDescription: "Ir al estado general del tablero.",
+  },
+  form: {
+    label: "Registrar paciente",
+    description: "Formulario de captura e importacion clinica.",
+    shortcutDescription: "Ir al formulario de registro de pacientes.",
+  },
+  patients: {
+    label: "Pacientes sincronizados",
+    description: "Listado completo y seleccion del paciente.",
+    shortcutDescription: "Ir al listado de pacientes.",
+  },
+  labs: {
+    label: "Laboratorios y signos",
+    description: "Valores cuantitativos relevantes del paciente.",
+    shortcutDescription: "Ir al widget de laboratorios y signos.",
+  },
+  critical: {
+    label: "Seguimiento prioritario",
+    description: "Pacientes con mayor riesgo relativo.",
+    shortcutDescription: "Ir al widget de pacientes prioritarios.",
+  },
+  location: {
+    label: "Ubicacion del paciente",
+    description: "Area, cama y contexto geografico-clinico.",
+    shortcutDescription: "Ir al widget de ubicacion del paciente.",
+  },
+  notes: {
+    label: "Notas del paciente",
+    description: "Registro medico y observaciones del turno.",
+    shortcutDescription: "Ir al widget de notas clinicas.",
+  },
+};
+
+const defaultQuickAccess = [
+  { id: "qa-overview", type: "widget", target: "overview", label: "Resumen del paciente" },
+  { id: "qa-ai", type: "widget", target: "medic-ai", label: "IA medica" },
+  { id: "qa-patients", type: "widget", target: "patients", label: "Pacientes activos" },
+  { id: "qa-labs", type: "widget", target: "labs", label: "Laboratorios" },
+  { id: "qa-notes", type: "widget", target: "notes", label: "Notas del turno" },
+  { id: "qa-visual", type: "action", target: "visual-settings", label: "Configuracion visual" },
+];
+
 const regionProfiles = {
   Barcelona: {
     label: "Barcelona",
@@ -135,12 +202,24 @@ const state = {
   theme: "light",
   trainingProfile: { ...fallbackTrainingProfile },
   workspaceAction: null,
+  hiddenWidgetKeys: [],
+  quickAccessItems: [...defaultQuickAccess],
+  uiMode: "idle",
+  placementTarget: null,
+  removeTargetKey: null,
+  quickAccessPickerMode: "add",
+  placementCommitPending: false,
+  resizeSession: null,
 };
 
 const leftPanel = document.getElementById("leftPanel");
 const rightPanel = document.getElementById("rightPanel");
 const leftToggle = document.getElementById("leftToggle");
 const rightToggle = document.getElementById("rightToggle");
+const topbar = document.querySelector(".topbar");
+const quickAccessList = document.getElementById("quickAccessList");
+const addQuickAccessButton = document.getElementById("addQuickAccessButton");
+const removeQuickAccessButton = document.getElementById("removeQuickAccessButton");
 const mainMenu = document.getElementById("mainMenu");
 const userMenu = document.getElementById("userMenu");
 const logoutButton = document.getElementById("logoutButton");
@@ -161,6 +240,15 @@ const statusBanner = document.getElementById("statusBanner");
 const dashboardGrid = document.getElementById("dashboardGrid");
 const layoutGuide = document.getElementById("layoutGuide");
 const contextMenu = document.getElementById("contextMenu");
+const widgetPicker = document.getElementById("widgetPicker");
+const widgetPickerGrid = document.getElementById("widgetPickerGrid");
+const closeWidgetPickerButton = document.getElementById("closeWidgetPickerButton");
+const quickAccessPicker = document.getElementById("quickAccessPicker");
+const quickAccessPickerGrid = document.getElementById("quickAccessPickerGrid");
+const closeQuickAccessPickerButton = document.getElementById("closeQuickAccessPickerButton");
+const devNotice = document.getElementById("devNotice");
+const devNoticeText = document.getElementById("devNoticeText");
+const closeDevNoticeButton = document.getElementById("closeDevNoticeButton");
 const layoutControls = document.getElementById("layoutControls");
 const cancelLayoutButton = document.getElementById("cancelLayoutButton");
 const saveLayoutButton = document.getElementById("saveLayoutButton");
@@ -187,6 +275,12 @@ const workspacePanel = document.getElementById("workspacePanel");
 const workspaceTitle = document.getElementById("workspaceTitle");
 const workspaceBody = document.getElementById("workspaceBody");
 const closeWorkspaceButton = document.getElementById("closeWorkspaceButton");
+const widgetPlacementOverlay = document.getElementById("widgetPlacementOverlay");
+const widgetPlacementGhost = document.getElementById("widgetPlacementGhost");
+const widgetPlacementTarget = document.getElementById("widgetPlacementTarget");
+const widgetPlacementShifts = document.createElement("div");
+widgetPlacementShifts.className = "widget-placement-shifts";
+widgetPlacementOverlay.appendChild(widgetPlacementShifts);
 
 const widgetElements = [...dashboardGrid.querySelectorAll("[data-widget-key]")];
 const resizeObserver = new ResizeObserver((entries) => {
@@ -201,6 +295,35 @@ const resizeObserver = new ResizeObserver((entries) => {
     });
   });
 });
+
+function getWidgetElementByKey(key) {
+  return widgetElements.find((widget) => widget.dataset.widgetKey === key) || null;
+}
+
+function isWidgetVisible(key) {
+  return !state.hiddenWidgetKeys.includes(key);
+}
+
+function getVisibleWidgetKeys() {
+  return state.layoutOrder.filter((key) => isWidgetVisible(key) && widgetCatalog[key]);
+}
+
+function getAddableWidgetKeys() {
+  return defaultWidgetOrder.filter((key) => state.hiddenWidgetKeys.includes(key));
+}
+
+function normalizeQuickAccessItems(items) {
+  return (items || [])
+    .filter((item) => item && item.type && item.target)
+    .map((item, index) => ({
+      id: item.id || `qa-${item.type}-${item.target}-${index}`.replaceAll(/[^a-z0-9-]/gi, "-"),
+      type: item.type,
+      target: item.target,
+      label:
+        item.label ||
+        (item.type === "widget" ? widgetCatalog[item.target]?.label || item.target : item.target),
+    }));
+}
 
 function setStatus(message, type = "info") {
   statusBanner.textContent = message;
@@ -365,10 +488,24 @@ function applyWidgetOrder(order) {
   });
 }
 
+function applyWidgetVisibility() {
+  widgetElements.forEach((widget) => {
+    const key = widget.dataset.widgetKey;
+    const visible = isWidgetVisible(key);
+    widget.hidden = !visible;
+    widget.style.display = visible ? "" : "none";
+  });
+}
+
 function applyTheme(theme) {
   state.theme = theme === "dark" ? "dark" : "light";
   document.body.classList.toggle("dark-mode", state.theme === "dark");
   themeToggleButton.textContent = state.theme === "dark" ? "Modo claro" : "Modo oscuro";
+}
+
+function syncTopbarOffset() {
+  const measuredHeight = Math.ceil(topbar?.getBoundingClientRect().height || 104);
+  document.documentElement.style.setProperty("--topbar-offset", `${measuredHeight + 14}px`);
 }
 
 function getWidgetMinimums(widget) {
@@ -437,6 +574,10 @@ async function loadUserLayout(userId) {
     const layoutData = layoutSnapshot.exists() ? layoutSnapshot.data() : null;
     const widgetOrder = layoutData?.widgetOrder || null;
     const widgetSizes = layoutData?.widgetSizes || {};
+    const hiddenWidgetKeys = Array.isArray(layoutData?.hiddenWidgetKeys) ? layoutData.hiddenWidgetKeys : [];
+    const quickAccessItems = Array.isArray(layoutData?.quickAccessItems) && layoutData.quickAccessItems.length
+      ? normalizeQuickAccessItems(layoutData.quickAccessItems)
+      : [...defaultQuickAccess];
     const theme = layoutData?.theme || localStorage.getItem("foxcat-theme") || "light";
 
     if (Array.isArray(widgetOrder) && widgetOrder.length) {
@@ -444,16 +585,23 @@ async function loadUserLayout(userId) {
       state.persistedLayoutOrder = [...widgetOrder];
       state.widgetSizes = { ...widgetSizes };
       state.persistedWidgetSizes = { ...widgetSizes };
+      state.hiddenWidgetKeys = [...hiddenWidgetKeys];
+      state.quickAccessItems = [...quickAccessItems];
       applyWidgetOrder(widgetOrder);
       applyWidgetSizes(widgetSizes);
+      applyWidgetVisibility();
     } else {
       state.layoutOrder = [...defaultWidgetOrder];
       state.persistedLayoutOrder = [...defaultWidgetOrder];
+      state.hiddenWidgetKeys = [];
+      state.quickAccessItems = normalizeQuickAccessItems(defaultQuickAccess);
       applyWidgetOrder(defaultWidgetOrder);
       applyWidgetSizes({});
+      applyWidgetVisibility();
     }
 
     applyTheme(theme);
+    renderQuickAccessList();
     return;
   } catch (error) {
     setStatus(`No se pudo cargar el layout del usuario: ${error.message}`, "error");
@@ -463,8 +611,12 @@ async function loadUserLayout(userId) {
   state.persistedLayoutOrder = [...defaultWidgetOrder];
   state.widgetSizes = {};
   state.persistedWidgetSizes = {};
+  state.hiddenWidgetKeys = [];
+  state.quickAccessItems = normalizeQuickAccessItems(defaultQuickAccess);
   applyWidgetOrder(defaultWidgetOrder);
+  applyWidgetVisibility();
   applyTheme(localStorage.getItem("foxcat-theme") || "light");
+  renderQuickAccessList();
 }
 
 async function saveUserLayout() {
@@ -473,6 +625,8 @@ async function saveUserLayout() {
   await setDoc(doc(db, "userLayouts", auth.currentUser.uid), {
     widgetOrder: state.layoutOrder,
     widgetSizes: state.widgetSizes,
+    hiddenWidgetKeys: state.hiddenWidgetKeys,
+    quickAccessItems: state.quickAccessItems,
     theme: state.theme,
     updatedAt: serverTimestamp(),
   });
@@ -828,7 +982,7 @@ function renderLocation(patient) {
       <div>
         <strong>${escapeHtml(patient.ward)}</strong>
         <p>Habitacion / cama: ${escapeHtml(patient.room)}</p>
-        <p>Ciudad clinica: ${escapeHtml(region?.label || patient.locationCity)} · Altitud ${region?.altitude || 12} msnm</p>
+        <p>Ciudad clinica: ${escapeHtml(region?.label || patient.locationCity)} · Altitud ${region?.altitude || 12} m sobre el nvl del mar</p>
       </div>
     </div>
   `;
@@ -1220,7 +1374,7 @@ function renderMedicAi(patient) {
         <div class="ai-inline">
           ${trainingLines.map((line) => `<span class="soft-pill">${escapeHtml(line)}</span>`).join("")}
           <span class="soft-pill">Confianza ${assessment.confidence}%</span>
-          <span class="soft-pill">O2 esperada aprox. ${assessment.expectedOxygen}%</span>
+          <span class="soft-pill">O2 esperada aprox. ${Math.round(assessment.expectedOxygen)}%</span>
         </div>
         <p class="ai-detail">${escapeHtml(assessment.environmentalSummary)}</p>
         <p class="ai-disclaimer">
@@ -1257,12 +1411,562 @@ function renderDoctor(user) {
   userEmail.textContent = user.email || "Sin correo";
   userRole.textContent = "Perfil autenticado con foto, preferencias visuales y panel IA clinico.";
   doctorPanelName.textContent = `Medico: ${name}`;
+  requestAnimationFrame(syncTopbarOffset);
+}
+
+function renderQuickAccessList() {
+  if (!quickAccessList) return;
+
+  if (!state.quickAccessItems.length) {
+    quickAccessList.innerHTML = `<li><div class="empty-state">No hay accesos rapidos. Usa el boton + para agregar uno.</div></li>`;
+    return;
+  }
+
+  quickAccessList.innerHTML = state.quickAccessItems
+    .map(
+      (item) => `
+        <li>
+          <button type="button" data-quick-access-id="${escapeHtml(item.id)}">${escapeHtml(item.label)}</button>
+        </li>
+      `
+    )
+    .join("");
+}
+
+function renderWidgetPicker() {
+  const addableKeys = getAddableWidgetKeys();
+  widgetPickerGrid.innerHTML = addableKeys.length
+    ? addableKeys
+        .map((key) => {
+          const item = widgetCatalog[key];
+          return `
+            <button type="button" class="picker-button" data-widget-pick="${key}">
+              <strong>${escapeHtml(item.label)}</strong>
+              <small>${escapeHtml(item.description)}</small>
+            </button>
+          `;
+        })
+        .join("")
+    : `<div class="empty-state">Todos los widgets disponibles ya estan visibles en el dashboard.</div>`;
+}
+
+function renderQuickAccessPicker() {
+  const titleNode = quickAccessPicker.querySelector("h3");
+  const descriptionNode = quickAccessPicker.querySelector(".floating-description");
+
+  if (state.quickAccessPickerMode === "remove") {
+    if (titleNode) titleNode.textContent = "Eliminar acceso rapido";
+    if (descriptionNode) {
+      descriptionNode.textContent = "Selecciona el acceso rapido que quieres quitar del panel izquierdo.";
+    }
+
+    quickAccessPickerGrid.innerHTML = state.quickAccessItems.length
+      ? state.quickAccessItems
+          .map(
+            (item) => `
+              <button type="button" class="picker-button" data-quick-remove-id="${escapeHtml(item.id)}">
+                <strong>${escapeHtml(item.label)}</strong>
+                <small>Quitar este acceso rapido del panel lateral izquierdo.</small>
+              </button>
+            `
+          )
+          .join("")
+      : `<div class="empty-state">No hay accesos rapidos para eliminar.</div>`;
+    return;
+  }
+
+  if (titleNode) titleNode.textContent = "Agregar acceso rapido";
+  if (descriptionNode) {
+    descriptionNode.textContent = "Elige un atajo. Al pulsarlo desde el panel izquierdo, te llevara al widget o vista relacionada.";
+  }
+
+  const existingTargets = new Set(state.quickAccessItems.map((item) => `${item.type}:${item.target}`));
+  const candidates = [
+    ...defaultWidgetOrder
+      .filter((key) => !existingTargets.has(`widget:${key}`))
+      .map((key) => ({
+        type: "widget",
+        target: key,
+        label: widgetCatalog[key].label,
+        description: widgetCatalog[key].shortcutDescription,
+      })),
+    ...[
+      { type: "action", target: "remote-monitoring", label: "Monitoreo remoto", description: "Abrir la vista remota de seguimiento." },
+      { type: "action", target: "visual-settings", label: "Configuracion visual", description: "Ir al centro de configuracion visual." },
+      { type: "action", target: "support-center", label: "Soporte", description: "Ir al panel de ayuda y soporte." },
+    ].filter((item) => !existingTargets.has(`action:${item.target}`)),
+  ];
+
+  quickAccessPickerGrid.innerHTML = candidates.length
+    ? candidates
+        .map(
+          (item) => `
+            <button type="button" class="picker-button" data-quick-pick-type="${item.type}" data-quick-pick-target="${item.target}">
+              <strong>${escapeHtml(item.label)}</strong>
+              <small>${escapeHtml(item.description)}</small>
+            </button>
+          `
+        )
+        .join("")
+    : `<div class="empty-state">No hay mas accesos rapidos disponibles para agregar.</div>`;
+}
+
+function showWidgetPicker() {
+  renderWidgetPicker();
+  widgetPicker.hidden = false;
+}
+
+function hideWidgetPicker() {
+  widgetPicker.hidden = true;
+}
+
+function showQuickAccessPicker() {
+  state.quickAccessPickerMode = "add";
+  renderQuickAccessPicker();
+  quickAccessPicker.hidden = false;
+}
+
+function showQuickAccessRemovalPicker() {
+  state.quickAccessPickerMode = "remove";
+  renderQuickAccessPicker();
+  quickAccessPicker.hidden = false;
+}
+
+function hideQuickAccessPicker() {
+  quickAccessPicker.hidden = true;
+}
+
+function closeModalOnBackdropClick(event, modal, onClose) {
+  if (event.target !== modal) return;
+  onClose();
+}
+
+function showDevNotice(optionLabel) {
+  devNoticeText.textContent = `${optionLabel}: opcion en desarrollo, favor esperar futuras actualizaciones.`;
+  devNotice.hidden = false;
+}
+
+function hideDevNotice() {
+  devNotice.hidden = true;
+}
+
+function getPlacementSizeForWidget(key) {
+  const widget = getWidgetElementByKey(key);
+  if (!widget) return { width: 360, height: 280 };
+  return clampWidgetSize(widget, state.widgetSizes[key] || {});
+}
+
+function clearPlacementShiftPreview() {
+  widgetPlacementShifts.innerHTML = "";
+}
+
+function clearWidgetPreviewTransforms() {
+  widgetElements.forEach((widget) => {
+    widget.style.removeProperty("--widget-preview-x");
+    widget.style.removeProperty("--widget-preview-y");
+    widget.classList.remove("preview-shift");
+    widget.classList.remove("preview-remove");
+    widget.dataset.resizeCursor = "";
+  });
+}
+
+function getVisibleWidgetElements() {
+  return getVisibleWidgetKeys()
+    .map((key) => getWidgetElementByKey(key))
+    .filter(Boolean);
+}
+
+function getCurrentVisibleSlotRects() {
+  return getVisibleWidgetElements()
+    .map((widget) => widget.getBoundingClientRect())
+    .filter(Boolean);
+}
+
+function buildPlacementSlots(addWidgetKey) {
+  const slotRects = getCurrentVisibleSlotRects();
+
+  const dashboardRect = dashboardGrid.getBoundingClientRect();
+  const addSize = addWidgetKey ? getPlacementSizeForWidget(addWidgetKey) : { width: 360, height: 280 };
+  const contentLeft = dashboardRect.left + 14;
+  const contentRight = dashboardRect.right - 14;
+  const gap = 18;
+
+  if (!slotRects.length) {
+    slotRects.push({
+      left: contentLeft,
+      top: dashboardRect.top + 14,
+      width: Math.min(addSize.width, Math.max(220, dashboardRect.width - 28)),
+      height: addSize.height,
+    });
+    return slotRects;
+  }
+
+  const lastRect = slotRects[slotRects.length - 1];
+  const projectedWidth = Math.min(addSize.width, Math.max(220, dashboardRect.width - 28));
+  const nextLeft = lastRect.left + lastRect.width + gap;
+  const staysOnRow = nextLeft + projectedWidth <= contentRight;
+
+  slotRects.push({
+    left: staysOnRow ? nextLeft : contentLeft,
+    top: staysOnRow ? lastRect.top : lastRect.top + lastRect.height + gap,
+    width: projectedWidth,
+    height: addSize.height,
+  });
+
+  return slotRects;
+}
+
+function getExpandedRect(rect, padding = 84) {
+  return {
+    left: rect.left - padding,
+    right: rect.left + rect.width + padding,
+    top: rect.top - padding,
+    bottom: rect.top + rect.height + padding,
+  };
+}
+
+function getDistanceToRect(clientX, clientY, rect) {
+  const dx = clientX < rect.left ? rect.left - clientX : clientX > rect.right ? clientX - rect.right : 0;
+  const dy = clientY < rect.top ? rect.top - clientY : clientY > rect.bottom ? clientY - rect.bottom : 0;
+  return Math.hypot(dx, dy);
+}
+
+function clampPlacementRect(rect, widgetSize, dashboardRect) {
+  const width = Math.min(widgetSize.width, Math.max(220, dashboardRect.width - 28));
+  const left = Math.min(Math.max(rect.left, dashboardRect.left + 14), dashboardRect.right - width - 14);
+  return {
+    left,
+    top: Math.max(rect.top, dashboardRect.top + 14),
+    width,
+    height: widgetSize.height,
+  };
+}
+
+function buildInsertionCandidates(widgetKey) {
+  const dashboardRect = dashboardGrid.getBoundingClientRect();
+  const widgetSize = getPlacementSizeForWidget(widgetKey);
+  const visibleElements = getVisibleWidgetElements();
+  const candidates = [];
+
+  if (!visibleElements.length) {
+    candidates.push({
+      left: dashboardRect.left + 14,
+      top: dashboardRect.top + 14,
+      width: Math.min(widgetSize.width, Math.max(220, dashboardRect.width - 28)),
+      height: widgetSize.height,
+      insertBeforeKey: null,
+    });
+    return candidates;
+  }
+
+  visibleElements.forEach((widget) => {
+    const rect = widget.getBoundingClientRect();
+    candidates.push(
+      clampPlacementRect(
+        {
+          left: rect.left,
+          top: rect.top,
+        },
+        widgetSize,
+        dashboardRect
+      )
+    );
+    candidates[candidates.length - 1].insertBeforeKey = widget.dataset.widgetKey;
+  });
+
+  const lastRect = visibleElements[visibleElements.length - 1].getBoundingClientRect();
+  const gap = 18;
+  const endLeft = lastRect.left + lastRect.width + gap;
+  const endWidth = Math.min(widgetSize.width, Math.max(220, dashboardRect.width - 28));
+  const staysOnRow = endLeft + endWidth <= dashboardRect.right - 14;
+  candidates.push({
+    left: staysOnRow ? endLeft : dashboardRect.left + 14,
+    top: staysOnRow ? lastRect.top : lastRect.top + lastRect.height + gap,
+    width: endWidth,
+    height: widgetSize.height,
+    insertBeforeKey: null,
+  });
+
+  return candidates;
+}
+
+function renderPlacementShiftPreview(target, widgetKey, mode = "add") {
+  clearPlacementShiftPreview();
+  clearWidgetPreviewTransforms();
+  if (!target || !widgetKey) return;
+
+  if (mode === "remove") {
+    getWidgetElementByKey(widgetKey)?.classList.add("preview-remove");
+    return;
+  }
+}
+
+function updatePlacementVisuals(target, key, mode = "add") {
+  if (!target || !key) {
+    widgetPlacementOverlay.hidden = true;
+    state.placementTarget = null;
+    clearPlacementShiftPreview();
+    clearWidgetPreviewTransforms();
+    return;
+  }
+
+  const dashboardRect = dashboardGrid.getBoundingClientRect();
+  const width = Math.max(180, Math.round(target.width));
+  const height = Math.max(120, Math.round(target.height));
+  const left = target.left - dashboardRect.left;
+  const top = target.top - dashboardRect.top;
+
+  widgetPlacementOverlay.hidden = false;
+  widgetPlacementOverlay.classList.toggle("delete-mode", mode === "remove");
+  widgetPlacementGhost.style.opacity = mode === "remove" ? "0" : "";
+  widgetPlacementGhost.style.left = `${left}px`;
+  widgetPlacementGhost.style.top = `${top}px`;
+  widgetPlacementGhost.style.width = `${width}px`;
+  widgetPlacementGhost.style.height = `${height}px`;
+  widgetPlacementGhost.textContent = widgetCatalog[key]?.label || "";
+  widgetPlacementTarget.style.left = `${left}px`;
+  widgetPlacementTarget.style.top = `${top}px`;
+  widgetPlacementTarget.style.width = `${width}px`;
+  widgetPlacementTarget.style.height = `${height}px`;
+  renderPlacementShiftPreview(target, key, mode);
+
+  state.placementTarget = { ...target, key };
+}
+
+function getInsertionTargetFromPoint(clientX, clientY, widgetKey) {
+  const dashboardRect = dashboardGrid.getBoundingClientRect();
+  const inside =
+    clientX >= dashboardRect.left &&
+    clientX <= dashboardRect.right &&
+    clientY >= dashboardRect.top &&
+    clientY <= dashboardRect.bottom;
+
+  if (!inside) return null;
+
+  const candidates = buildInsertionCandidates(widgetKey);
+  const nearest = candidates
+    .map((candidate) => {
+      const expandedRect = getExpandedRect(candidate);
+      return {
+        candidate,
+        insideExpanded:
+          clientX >= expandedRect.left &&
+          clientX <= expandedRect.right &&
+          clientY >= expandedRect.top &&
+          clientY <= expandedRect.bottom,
+        distance: getDistanceToRect(clientX, clientY, candidate),
+      };
+    })
+    .filter((entry) => entry.insideExpanded || entry.distance < 140)
+    .sort((a, b) => a.distance - b.distance)[0];
+
+  return nearest?.candidate || null;
+}
+
+function getDeleteTargetFromPoint(clientX, clientY) {
+  const hovered = document.elementFromPoint(clientX, clientY)?.closest?.("[data-widget-key]");
+  if (!hovered || hovered.hidden) return null;
+  const key = hovered.dataset.widgetKey;
+  if (!isWidgetVisible(key)) return null;
+  const rect = hovered.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+    removeKey: key,
+  };
+}
+
+function cancelWidgetInteraction(message = "Operacion cancelada.") {
+  state.uiMode = "idle";
+  state.removeTargetKey = null;
+  state.placementTarget = null;
+  state.placementCommitPending = false;
+  widgetPlacementOverlay.hidden = true;
+  widgetPlacementOverlay.classList.remove("delete-mode");
+  clearPlacementShiftPreview();
+  clearWidgetPreviewTransforms();
+  if (message) setStatus(message, "info");
+}
+
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function getResizeDirectionForPointer(widget, clientX, clientY) {
+  if (!state.layoutEditMode || state.activeResizeWidgetKey !== widget.dataset.widgetKey) return "";
+
+  const rect = widget.getBoundingClientRect();
+  const edge = 30;
+  const nearLeft = clientX >= rect.left && clientX <= rect.left + edge;
+  const nearRight = clientX <= rect.right && clientX >= rect.right - edge;
+  const nearTop = clientY >= rect.top && clientY <= rect.top + edge;
+  const nearBottom = clientY <= rect.bottom && clientY >= rect.bottom - edge;
+
+  const vertical = nearTop ? "n" : nearBottom ? "s" : "";
+  const horizontal = nearLeft ? "w" : nearRight ? "e" : "";
+  return `${vertical}${horizontal}`;
+}
+
+function getResizeCursorToken(direction) {
+  if (!direction) return "";
+  if (direction === "n" || direction === "s") return "ns";
+  if (direction === "e" || direction === "w") return "ew";
+  if (direction === "nw" || direction === "se") return "nwse";
+  return "nesw";
+}
+
+function beginWidgetResize(widget, direction, event) {
+  const key = widget.dataset.widgetKey;
+  const startRect = widget.getBoundingClientRect();
+  const startSize = clampWidgetSize(widget, state.draftWidgetSizes[key] || state.widgetSizes[key] || {
+    width: Math.round(startRect.width),
+    height: Math.round(startRect.height),
+  });
+
+  state.resizeSession = {
+    key,
+    direction,
+    startX: event.clientX,
+    startY: event.clientY,
+    startWidth: startSize.width,
+    startHeight: startSize.height,
+  };
+}
+
+function handleWidgetResizeMove(event) {
+  if (!state.resizeSession) return;
+
+  const widget = getWidgetElementByKey(state.resizeSession.key);
+  if (!widget) return;
+
+  const { direction, startX, startY, startWidth, startHeight, key } = state.resizeSession;
+  const deltaX = event.clientX - startX;
+  const deltaY = event.clientY - startY;
+
+  let width = startWidth;
+  let height = startHeight;
+
+  if (direction.includes("e")) width = startWidth + deltaX;
+  if (direction.includes("w")) width = startWidth - deltaX;
+  if (direction.includes("s")) height = startHeight + deltaY;
+  if (direction.includes("n")) height = startHeight - deltaY;
+
+  const clamped = clampWidgetSize(widget, { width, height });
+  state.draftWidgetSizes[key] = clamped;
+  widget.style.setProperty("--widget-width", `${clamped.width}px`);
+  widget.style.setProperty("--widget-height", `${clamped.height}px`);
+}
+
+function stopWidgetResize() {
+  state.resizeSession = null;
+}
+
+function getDefaultInsertBeforeKey(widgetKey) {
+  const widgetIndex = defaultWidgetOrder.indexOf(widgetKey);
+  if (widgetIndex === -1) return null;
+
+  for (let index = widgetIndex + 1; index < defaultWidgetOrder.length; index += 1) {
+    const candidateKey = defaultWidgetOrder[index];
+    if (isWidgetVisible(candidateKey)) return candidateKey;
+  }
+
+  return null;
+}
+
+function highlightWidget(widgetKey) {
+  const widget = getWidgetElementByKey(widgetKey);
+  if (!widget) return;
+
+  widget.classList.remove("widget-focus-flash");
+  void widget.offsetWidth;
+  widget.classList.add("widget-focus-flash");
+  widget.scrollIntoView({ behavior: "smooth", block: "center" });
+  window.setTimeout(() => {
+    widget.classList.remove("widget-focus-flash");
+  }, 1800);
+}
+
+async function addWidgetInstantly(widgetKey) {
+  hideWidgetPicker();
+  if (!widgetCatalog[widgetKey]) return;
+
+  state.hiddenWidgetKeys = state.hiddenWidgetKeys.filter((key) => key !== widgetKey);
+  const nextOrder = state.layoutOrder.filter((key) => key !== widgetKey);
+  const insertBeforeKey = getDefaultInsertBeforeKey(widgetKey);
+
+  if (insertBeforeKey) {
+    const insertIndex = nextOrder.indexOf(insertBeforeKey);
+    nextOrder.splice(insertIndex, 0, widgetKey);
+  } else {
+    nextOrder.push(widgetKey);
+  }
+
+  state.layoutOrder = nextOrder;
+  state.persistedLayoutOrder = [...state.layoutOrder];
+  applyWidgetOrder(state.layoutOrder);
+  applyWidgetVisibility();
+  renderQuickAccessPicker();
+  renderDashboard();
+  await saveUserLayout();
+  requestAnimationFrame(() => {
+    highlightWidget(widgetKey);
+  });
+  setStatus(`Widget ${widgetCatalog[widgetKey].label} agregado correctamente y resaltado en el tablero.`, "success");
+}
+
+function startRemoveWidgetFlow() {
+  state.uiMode = "remove-widget";
+  state.removeTargetKey = null;
+  state.placementTarget = null;
+  widgetPlacementGhost.textContent = "";
+  setStatus("Mueve el cursor sobre el widget a eliminar. Clic izquierdo confirma la eliminacion. Clic derecho cancela.", "info");
+}
+
+async function finalizeWidgetRemoval() {
+  if (!state.placementTarget?.key) return;
+  const removeKey = state.placementTarget.key;
+  if (getVisibleWidgetKeys().length <= 1) {
+    setStatus("Debe permanecer al menos un widget visible en el dashboard.", "error");
+    return;
+  }
+  state.hiddenWidgetKeys = [...new Set([...state.hiddenWidgetKeys, removeKey])];
+  state.quickAccessItems = state.quickAccessItems.filter((item) => !(item.type === "widget" && item.target === removeKey));
+  if (state.selectedPatientId && removeKey === "notes") {
+    notesTarget.textContent = "Sin paciente";
+  }
+  applyWidgetVisibility();
+  renderQuickAccessList();
+  renderDashboard();
+  cancelWidgetInteraction("");
+  await saveUserLayout();
+  setStatus(`Widget ${widgetCatalog[removeKey].label} ocultado correctamente.`, "success");
+}
+
+function handleWidgetInteractionMove(event) {
+  if (state.uiMode === "remove-widget") {
+    const target = getDeleteTargetFromPoint(event.clientX, event.clientY);
+    updatePlacementVisuals(
+      target
+        ? { left: target.left, top: target.top, width: target.width, height: target.height, insertBeforeKey: null }
+        : null,
+      target?.removeKey || "",
+      "remove"
+    );
+    if (target) {
+      state.placementTarget = { key: target.removeKey };
+    }
+  }
 }
 
 function renderWorkspace(title, content) {
   workspaceTitle.textContent = title;
   workspaceBody.innerHTML = content;
   workspacePanel.hidden = false;
+  requestAnimationFrame(() => {
+    workspacePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 function closeWorkspace() {
@@ -1270,6 +1974,26 @@ function closeWorkspace() {
   workspaceTitle.textContent = "Vista auxiliar";
   workspaceBody.innerHTML = "";
   state.workspaceAction = null;
+}
+
+function scrollToWidgetKey(widgetKey) {
+  const widget = getWidgetElementByKey(widgetKey);
+  if (!widget || !isWidgetVisible(widgetKey)) {
+    setStatus("Ese widget no esta visible ahora mismo. Puedes volver a agregarlo desde clic derecho.", "error");
+    return;
+  }
+
+  widget.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function triggerQuickAccess(item) {
+  if (!item) return;
+  if (item.type === "widget") {
+    scrollToWidgetKey(item.target);
+    return;
+  }
+  renderWorkspaceAction(item.target);
+  setStatus(`Se abrio ${item.label}.`, "success");
 }
 
 function summarizeDay() {
@@ -1546,6 +2270,8 @@ function renderWorkspaceAction(action) {
 function renderDashboard() {
   const patient = getSelectedPatient();
 
+  applyWidgetVisibility();
+  renderQuickAccessList();
   renderPatientOverview(patient);
   renderMedicAi(patient);
   renderPatients();
@@ -1699,6 +2425,55 @@ document.addEventListener("click", (event) => {
   if (!clickedUserMenu) userMenu.classList.remove("visible");
   if (!clickedContextMenu) hideContextMenu();
   if (!clickedMainMenu) mainMenu.style.display = "none";
+  if (event.target === widgetPicker) hideWidgetPicker();
+  if (event.target === quickAccessPicker) hideQuickAccessPicker();
+  if (event.target === devNotice) hideDevNotice();
+});
+
+document.addEventListener("mousemove", (event) => {
+  if (state.resizeSession) {
+    handleWidgetResizeMove(event);
+    return;
+  }
+
+  if (state.uiMode === "remove-widget") {
+    handleWidgetInteractionMove(event);
+  }
+});
+
+document.addEventListener("mouseup", () => {
+  stopWidgetResize();
+});
+
+document.addEventListener("click", async (event) => {
+  if (state.uiMode === "remove-widget") {
+    if (!state.placementTarget?.key || state.placementCommitPending) return;
+    const targetRect = widgetPlacementTarget.getBoundingClientRect();
+    const insideTarget =
+      event.clientX >= targetRect.left &&
+      event.clientX <= targetRect.right &&
+      event.clientY >= targetRect.top &&
+      event.clientY <= targetRect.bottom;
+
+    if (!insideTarget) return;
+    event.preventDefault();
+    state.placementCommitPending = true;
+    await wait(220);
+    if (state.uiMode !== "remove-widget" || !state.placementTarget?.key) {
+      state.placementCommitPending = false;
+      return;
+    }
+    await finalizeWidgetRemoval();
+    state.placementCommitPending = false;
+  }
+});
+
+document.addEventListener("contextmenu", (event) => {
+  if (state.uiMode === "remove-widget") {
+    event.preventDefault();
+    cancelWidgetInteraction("Operacion cancelada. Puedes volver a intentarlo cuando quieras.");
+    return;
+  }
 });
 
 dashboardGrid.addEventListener("contextmenu", (event) => {
@@ -1731,6 +2506,17 @@ contextMenu.addEventListener("click", (event) => {
     state.draftWidgetSizes = { ...state.widgetSizes };
     setLayoutEditMode(true);
     setStatus("Modo de edicion activo. Arrastra widgets y confirma con el boton verde.", "info");
+    return;
+  }
+
+  if (action === "add-widget") {
+    showWidgetPicker();
+    setStatus("Selecciona el widget que quieres agregar.", "info");
+    return;
+  }
+
+  if (action === "remove-widget") {
+    startRemoveWidgetFlow();
   }
 });
 
@@ -1750,6 +2536,25 @@ widgetElements.forEach((widget) => {
     } else {
       setStatus("Redimensionado desactivado para el widget seleccionado.", "success");
     }
+  });
+
+  widget.addEventListener("mousemove", (event) => {
+    const direction = getResizeDirectionForPointer(widget, event.clientX, event.clientY);
+    widget.dataset.resizeCursor = getResizeCursorToken(direction);
+  });
+
+  widget.addEventListener("mouseleave", () => {
+    if (!state.resizeSession) {
+      widget.dataset.resizeCursor = "";
+    }
+  });
+
+  widget.addEventListener("mousedown", (event) => {
+    if (!state.layoutEditMode || event.button !== 0) return;
+    const direction = getResizeDirectionForPointer(widget, event.clientX, event.clientY);
+    if (!direction) return;
+    event.preventDefault();
+    beginWidgetResize(widget, direction, event);
   });
 
   widget.addEventListener("dragstart", (event) => {
@@ -1961,6 +2766,76 @@ if (logoutButton) {
   });
 }
 
+if (closeWidgetPickerButton) {
+  closeWidgetPickerButton.addEventListener("click", hideWidgetPicker);
+}
+
+if (closeQuickAccessPickerButton) {
+  closeQuickAccessPickerButton.addEventListener("click", hideQuickAccessPicker);
+}
+
+if (quickAccessPicker) {
+  quickAccessPicker.addEventListener("click", (event) => {
+    closeModalOnBackdropClick(event, quickAccessPicker, hideQuickAccessPicker);
+  });
+}
+
+if (closeDevNoticeButton) {
+  closeDevNoticeButton.addEventListener("click", hideDevNotice);
+}
+
+if (addQuickAccessButton) {
+  addQuickAccessButton.addEventListener("click", showQuickAccessPicker);
+}
+
+if (removeQuickAccessButton) {
+  removeQuickAccessButton.addEventListener("click", showQuickAccessRemovalPicker);
+}
+
+if (widgetPickerGrid) {
+  widgetPickerGrid.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-widget-pick]");
+    if (!button) return;
+    await addWidgetInstantly(button.dataset.widgetPick);
+  });
+}
+
+if (quickAccessPickerGrid) {
+  quickAccessPickerGrid.addEventListener("click", async (event) => {
+    const removeButton = event.target.closest("[data-quick-remove-id]");
+    if (removeButton) {
+      const removed = state.quickAccessItems.find((item) => item.id === removeButton.dataset.quickRemoveId);
+      state.quickAccessItems = state.quickAccessItems.filter((item) => item.id !== removeButton.dataset.quickRemoveId);
+      hideQuickAccessPicker();
+      renderQuickAccessList();
+      await saveUserLayout();
+      setStatus(`Acceso rapido ${removed?.label || "seleccionado"} eliminado correctamente.`, "success");
+      return;
+    }
+
+    const button = event.target.closest("[data-quick-pick-target]");
+    if (!button) return;
+
+    const type = button.dataset.quickPickType;
+    const target = button.dataset.quickPickTarget;
+    const label =
+      type === "widget"
+        ? widgetCatalog[target]?.label || target
+        : button.querySelector("strong")?.textContent || target;
+
+    state.quickAccessItems.push({
+      id: `qa-${type}-${target}`.replaceAll(/[^a-z0-9-]/gi, "-"),
+      type,
+      target,
+      label,
+    });
+    hideQuickAccessPicker();
+    renderQuickAccessList();
+    await saveUserLayout();
+    setStatus(`Acceso rapido ${label} agregado correctamente.`, "success");
+  });
+}
+
 mainMenu.addEventListener("click", (event) => {
   const button = event.target.closest("[data-page-action]");
   if (!button) return;
@@ -1968,9 +2843,22 @@ mainMenu.addEventListener("click", (event) => {
 });
 
 leftPanel.addEventListener("click", (event) => {
+  const quickAccessButton = event.target.closest("[data-quick-access-id]");
+  if (quickAccessButton) {
+    const item = state.quickAccessItems.find((entry) => entry.id === quickAccessButton.dataset.quickAccessId);
+    triggerQuickAccess(item);
+    return;
+  }
+
   const button = event.target.closest("[data-panel-target]");
   if (!button) return;
   renderWorkspaceAction(button.dataset.panelTarget);
+});
+
+rightPanel.addEventListener("click", (event) => {
+  const devButton = event.target.closest("[data-dev-option]");
+  if (!devButton) return;
+  showDevNotice(devButton.dataset.devOption);
 });
 
 workspaceBody.addEventListener("click", (event) => {
@@ -2059,6 +2947,7 @@ medicAiWidget.addEventListener("change", (event) => {
 });
 
 async function bootDashboard() {
+  syncTopbarOffset();
   applyWidgetOrder(defaultWidgetOrder);
   applyWidgetSizes({});
   widgetElements.forEach((widget) => resizeObserver.observe(widget));
@@ -2099,5 +2988,7 @@ async function bootDashboard() {
     );
   });
 }
+
+window.addEventListener("resize", syncTopbarOffset);
 
 bootDashboard();
