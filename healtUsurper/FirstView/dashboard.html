@@ -51,15 +51,17 @@
   </header>
 
   <aside class="left-panel" id="leftPanel">
-    <h3>Accesos rapidos</h3>
-    <ul class="menu-list">
-      <li><button type="button" data-panel-target="active-patients">Pacientes activos</button></li>
-      <li><button type="button" data-panel-target="remote-monitoring">Monitoreo remoto</button></li>
-      <li><button type="button" data-panel-target="labs-overview">Laboratorios</button></li>
-      <li><button type="button" data-panel-target="shift-notes">Notas del turno</button></li>
-      <li><button type="button" data-panel-target="visual-settings">Configuracion visual</button></li>
-      <li><button type="button" data-panel-target="support-center">Soporte</button></li>
-    </ul>
+    <div class="panel-head">
+      <div>
+        <h3>Accesos rapidos</h3>
+        <p class="panel-subtitle">Acciones y atajos personalizables</p>
+      </div>
+      <div class="panel-tools">
+        <button type="button" id="addQuickAccessButton" class="panel-tool-button" aria-label="Agregar acceso rapido">+</button>
+        <button type="button" id="removeQuickAccessButton" class="panel-tool-button" aria-label="Eliminar acceso rapido">-</button>
+      </div>
+    </div>
+    <ul id="quickAccessList" class="menu-list"></ul>
   </aside>
 
   <div class="left-toggle" id="leftToggle">
@@ -67,13 +69,25 @@
   </div>
 
   <aside class="right-panel" id="rightPanel">
-    <h3>Resumen del turno</h3>
+    <div class="panel-head">
+      <div>
+        <h3>Resumen del turno</h3>
+        <p class="panel-subtitle">Estado general y herramientas futuras</p>
+      </div>
+    </div>
     <ul>
       <li id="doctorPanelName">Medico: cargando...</li>
       <li id="doctorPanelPatients">Pacientes registrados: 0</li>
       <li id="doctorPanelRisk">Pacientes en riesgo: 0</li>
       <li id="doctorPanelTraining">Motor IA: calibrando dataset local...</li>
       <li>Menu contextual: clic derecho</li>
+    </ul>
+    <div class="panel-divider"></div>
+    <ul class="menu-list right-panel-actions">
+      <li><button type="button" data-dev-option="telemedicina avanzada">Telemedicina avanzada</button></li>
+      <li><button type="button" data-dev-option="firma clinica digital">Firma clinica digital</button></li>
+      <li><button type="button" data-dev-option="interconsulta automatica">Interconsulta automatica</button></li>
+      <li><button type="button" data-dev-option="conexion con ambulancia">Conexion con ambulancia</button></li>
     </ul>
   </aside>
 
@@ -95,6 +109,49 @@
     <button type="button" data-action="select-first">1. Seleccionar primer paciente</button>
     <button type="button" data-action="focus-notes">2. Ir a notas del paciente</button>
     <button type="button" data-action="edit-layout">3. Editar posiciones</button>
+    <button type="button" data-action="add-widget">4. Agregar widget</button>
+    <button type="button" data-action="remove-widget">5. Eliminar widget</button>
+  </div>
+
+  <div id="widgetPicker" class="floating-modal" hidden>
+    <div class="floating-card">
+      <div class="floating-card-head">
+        <div>
+          <span class="eyebrow">Agregar widget</span>
+          <h3>Elige un tipo de widget</h3>
+        </div>
+        <button type="button" id="closeWidgetPickerButton" class="ghost-button">Cerrar</button>
+      </div>
+      <p class="floating-description">
+        Selecciona un widget. Luego veras una vista semitransparente para ubicarlo.
+        Haz clic izquierdo sobre el recuadro solido para colocarlo. Clic derecho cancela.
+      </p>
+      <div id="widgetPickerGrid" class="widget-picker-grid"></div>
+    </div>
+  </div>
+
+  <div id="quickAccessPicker" class="floating-modal" hidden>
+    <div class="floating-card">
+      <div class="floating-card-head">
+        <div>
+          <span class="eyebrow">Accesos rapidos</span>
+          <h3>Agregar acceso rapido</h3>
+        </div>
+        <button type="button" id="closeQuickAccessPickerButton" class="ghost-button">Cerrar</button>
+      </div>
+      <p class="floating-description">
+        Elige un atajo. Al pulsarlo desde el panel izquierdo, te llevara al widget o vista relacionada.
+      </p>
+      <div id="quickAccessPickerGrid" class="widget-picker-grid"></div>
+    </div>
+  </div>
+
+  <div id="devNotice" class="dev-notice" hidden>
+    <div class="dev-notice-card">
+      <strong>Opcion en desarrollo</strong>
+      <p id="devNoticeText">Favor esperar futuras actualizaciones.</p>
+      <button type="button" id="closeDevNoticeButton" class="ghost-button">Entendido</button>
+    </div>
   </div>
 
   <div id="layoutControls" class="layout-controls" hidden>
@@ -126,6 +183,12 @@
 
     <section class="dashboard" id="dashboardGrid">
       <div id="layoutGuide" class="layout-guide" aria-hidden="true"></div>
+      <div id="widgetPlacementOverlay" class="widget-placement-overlay" hidden>
+        <div id="widgetPlacementGhost" class="widget-placement-ghost"></div>
+        <div id="widgetPlacementTarget" class="widget-placement-target">
+          <span class="widget-placement-dot"></span>
+        </div>
+      </div>
 
       <section class="widget widget-wide" data-widget-key="overview" draggable="false">
         <div id="patientOverview" class="widget-content"></div>
