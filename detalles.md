@@ -94,6 +94,8 @@ Campos recomendados para entender primero:
 - `aiDebugMinimized`: controla si la ventana tecnica esta minimizada
 - `aiDebugPosition`: posicion libre del panel tecnico flotante
 - `aiDebugDrag`: estado temporal del arrastre del panel tecnico
+- `aiDebugSize`: tamano persistido en memoria para el panel tecnico
+- `aiDebugResizeSession`: estado temporal del resize del panel tecnico por bordes
 
 Posibles modificaciones:
 
@@ -158,6 +160,7 @@ Ventaja:
 - evita recalcular el dataset dentro del dashboard
 - permite precargar la IA desde `index.html`
 - centraliza mantenimiento y actualizaciones del modelo
+- sirve como fuente auditable para el panel de depuracion clinica
 
 #### `expectedOxygen`
 
@@ -319,23 +322,37 @@ Revisar:
 - `openAiDebugWindow()`
 - `toggleAiDebugMinimize()`
 - `beginAiDebugDrag(event)`
+- `beginAiDebugResize(direction, event)`
+- `handleAiDebugResize(event)`
+- `clampAiDebugSize(size)`
+- `applyAiDebugWindowGeometry()`
 - `trainingProfile.selectedModelName`
 - estilos `ai-debug-*` en `dashboard.css`
 
 Que muestra actualmente:
 
 - modelo activo
+- origen de la IA: manifiesto entrenado o perfil base
 - modo de calibracion
 - precision tecnica estimada
 - precision del modelo entrenado
+- metrica de seleccion del modelo
+- fecha del manifiesto y cantidad de candidatos evaluados
+- cobertura de variables disponibles y faltantes
+- documento, estado y contexto del paciente analizado
+- metricas de triage y hospitalizacion
+- resumen estadistico del dataset usado para entrenar
 - datos de prueba reducidos
 - variables clinicas y regionales
+- detonantes y recomendaciones visibles para el caso
+- bloque de validacion heuristica resumido
 - matematica resumida
 - traza corta del proceso
 
 Precaucion:
 
 - la precision visible es una metrica tecnica interna y no una validacion clinica certificada
+- el panel tecnico ahora tambien se puede redimensionar desde bordes y esquinas; si se cambia su UX revisar JS y CSS juntos
 
 ## 4. Diagrama de flujo
 

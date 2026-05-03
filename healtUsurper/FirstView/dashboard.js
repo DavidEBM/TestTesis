@@ -229,6 +229,8 @@ const state = {
   aiDebugMinimized: false,
   aiDebugPosition: { x: null, y: null },
   aiDebugDrag: null,
+  aiDebugSize: { width: 560, height: 640 },
+  aiDebugResizeSession: null,
 };
 
 const leftPanel = document.getElementById("leftPanel");
@@ -239,7 +241,9 @@ const topbar = document.querySelector(".topbar");
 const quickAccessList = document.getElementById("quickAccessList");
 const addQuickAccessButton = document.getElementById("addQuickAccessButton");
 const removeQuickAccessButton = document.getElementById("removeQuickAccessButton");
+const mainMenuButton = document.getElementById("mainMenuButton");
 const mainMenu = document.getElementById("mainMenu");
+const doctorMenuButton = document.getElementById("doctorMenuButton");
 const userMenu = document.getElementById("userMenu");
 const logoutButton = document.getElementById("logoutButton");
 const themeToggleButton = document.getElementById("themeToggleButton");
@@ -278,6 +282,7 @@ const aiDebugToggleButton = document.getElementById("aiDebugToggleButton");
 const aiDebugWindow = document.getElementById("aiDebugWindow");
 const aiDebugHeader = document.getElementById("aiDebugHeader");
 const aiDebugBody = document.getElementById("aiDebugBody");
+const aiDebugResizeHandles = document.querySelectorAll("[data-ai-debug-resize]");
 const minimizeAiDebugButton = document.getElementById("minimizeAiDebugButton");
 const closeAiDebugButton = document.getElementById("closeAiDebugButton");
 const alertsWidget = document.getElementById("alertsWidget");
@@ -1120,6 +1125,22 @@ function getTechnicalPrecision(assessment) {
   return Math.round((coverageFactor * 0.7 + datasetFactor * 0.3) * 100);
 }
 
+function formatDebugTimestamp(value) {
+  if (!value) return "sin fecha";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+
+  return parsed.toLocaleString("es-CO", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function buildAiDebugData(patient) {
   const training = state.trainingProfile;
   const manifest = state.trainingManifest || {};
@@ -1134,6 +1155,8 @@ function buildAiDebugData(patient) {
   const precision = getTechnicalPrecision(assessment);
   const modelPrecision = Number(activeModel.combinedPrecision || training.selectedModelPrecision || 0);
   const coverageFields = [
+    { label: "Documento", value: patient?.documentId },
+    { label: "Edad", value: patient?.age },
     { label: "Saturacion O2", value: patient?.oxygenSaturation },
     { label: "Frecuencia respiratoria", value: patient?.respiratoryRate },
     { label: "Pulso", value: patient?.pulse },
@@ -1144,6 +1167,8 @@ function buildAiDebugData(patient) {
     { label: "Antecedente cardiaco", value: patient?.heartFailureHistory },
     { label: "Estado clinico", value: patient?.status },
     { label: "Tabaquismo", value: patient?.smokingStatus },
+    { label: "Hemoglobina", value: patient?.hemoglobin },
+    { label: "IMC", value: patient?.bmi },
   ];
   const foundCoverageCount = coverageFields.filter(({ value }) => {
     if (value === null || value === undefined) return false;
@@ -1169,6 +1194,22 @@ function buildAiDebugData(patient) {
     .slice(0, 4)
     .map(([location, count]) => `${location}: ${count}`)
     .join(" | ");
+  const triagePrecision = Number(activeModel.triage?.precision_weighted || training.triagePrecision || 0);
+  const hospitalizationPrecision = Number(activeModel.hospitalization?.precision_weighted || training.hospitalizationPrecision || 0);
+  const generatedAtLabel = formatDebugTimestamp(manifest.generatedAt);
+  const manifestFreshnessMinutes = manifest.generatedAt
+    ? Math.max(0, Math.round((Date.now() - new Date(manifest.generatedAt).getTime()) / 60000))
+    : null;
+  const validationSummary = manifest.riskMathValidation?.summary || "Sin bloque de validacion heuristica en el manifiesto actual.";
+  const patientSignalLines = patient
+    ? [
+        `Documento: ${patient.documentId || "sin dato"}`,
+        `Estado actual: ${patient.status || "sin dato"}`,
+        `Ciudad: ${region?.label || patient.locationCity || training.baseLocation}`,
+        `Servicio / cama: ${patient.ward || "sin dato"} / ${patient.room || "sin dato"}`,
+        `Condicion principal: ${patient.condition || "sin dato"}`,
+      ]
+    : ["Selecciona un paciente para ver la senal clinica completa del turno."];
 
   return {
     assessment,
@@ -1184,21 +1225,39 @@ function buildAiDebugData(patient) {
       ? "Foxcat Explainable Heuristic v1 - calibracion local COPD"
       : "Foxcat Explainable Heuristic v1 - perfil base de respaldo"),
     generatedAt: manifest.generatedAt || "",
+    generatedAtLabel,
+    manifestFreshnessMinutes,
     selectedMetric: manifest.selectedMetric || "combined_precision_weighted",
     modelAdjusted: Boolean(activeModel.adjusted),
     modelArtifacts: activeModel.artifacts || {},
+    modelArtifactsCount: Object.values(activeModel.artifacts || {}).filter(Boolean).length,
     triageMetrics: activeModel.triage || {},
     hospitalizationMetrics: activeModel.hospitalization || {},
+    triagePrecision,
+    hospitalizationPrecision,
     combinedAucRoc: Number(activeModel.combinedAucRoc || 0),
+    candidateCount: candidateModels.length,
     rankedCandidates,
     riskMathValidation,
+    validationSummary,
     calibrationMode: training.calibrationMode || (training.ready ? "Calibracion estadistica local" : "Perfil base local"),
+    trainingReady: Boolean(training.ready),
+    retrainedWithAdjustments: Boolean(training.retrainedWithAdjustments),
     trainingSummary: training.ready
       ? `Training.py cargo ${training.datasetPatients} registros desde ${training.sourceFiles?.join(" + ") || "dataset local"} para recalcular medias, tasas y distribucion por ciudad. Modelo activo: ${training.selectedModelName || "sin nombre"} con precision combinada ${training.selectedModelPrecision || precision}%.`
       : "No hubo entrenamiento en tiempo real. El motor usa un perfil base de respaldo con medias predefinidas.",
     sourceFiles: training.sourceFiles?.join(", ") || "Dataset local",
     sampleRows: training.sampleRows?.length ? training.sampleRows : fallbackTrainingProfile.sampleRows,
     locationSummary: locationSummary || "Barcelona: 230",
+    datasetPatients: Number(training.datasetPatients || 0),
+    baseLocation: training.baseLocation || "Barcelona",
+    meanAge: Number(training.meanAge || 0),
+    meanOxygen: Number(training.meanOxygen || 0),
+    meanRespRate: Number(training.meanRespRate || 0),
+    heartFailureRate: Math.round(Number(training.heartFailureRate || 0) * 100),
+    smokingExposureRate: Math.round(Number(training.smokingExposureRate || 0) * 100),
+    goldHighRate: Math.round(Number(training.goldHighRate || 0) * 100),
+    patientSignalLines,
     activeVariables: [
       `Edad actual: ${patient?.age || "sin dato"}`,
       `Saturacion O2: ${patient?.oxygenSaturation || "sin dato"}%`,
@@ -1237,6 +1296,8 @@ function buildAiDebugData(patient) {
           "1. Esperando paciente activo.",
           "2. El panel mostrara trazas y variables cuando haya un caso seleccionado.",
         ],
+    triggerLines: assessment?.triggers?.length ? assessment.triggers : ["Sin detonantes visibles hasta seleccionar un paciente."],
+    recommendationLines: assessment?.recommendations?.length ? assessment.recommendations : ["Sin recomendaciones visibles hasta seleccionar un paciente."],
   };
 }
 
@@ -1258,7 +1319,7 @@ function renderAiDebugWindow() {
         .map(
           (candidate, index) => `
             <li>
-              #${index + 1} ${escapeHtml(candidate.name)} · Precision ${Number(candidate.combinedPrecision || 0)}% · AUC ${Number(candidate.combinedAucRoc || 0)}%${candidate.adjusted ? " · reentrenado" : ""}
+              #${index + 1} ${escapeHtml(candidate.name)} - Precision ${Number(candidate.combinedPrecision || 0)}% - AUC ${Number(candidate.combinedAucRoc || 0)}%${candidate.adjusted ? " - reentrenado" : ""}
             </li>
           `
         )
@@ -1284,6 +1345,10 @@ function renderAiDebugWindow() {
           <strong>${escapeHtml(debugData.modelName)}</strong>
         </div>
         <div class="ai-debug-metric">
+          <span>IA entrenada</span>
+          <strong>${debugData.trainingReady ? "Si, manifest cargado" : "Perfil base de respaldo"}</strong>
+        </div>
+        <div class="ai-debug-metric">
           <span>Porcentaje de precision</span>
           <strong>${debugData.modelPrecision}%</strong>
         </div>
@@ -1304,15 +1369,23 @@ function renderAiDebugWindow() {
           <strong>${escapeHtml(patient?.name || "Sin paciente seleccionado")}</strong>
         </div>
         <div class="ai-debug-metric">
+          <span>Manifest generado</span>
+          <strong>${escapeHtml(debugData.generatedAtLabel)}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Metrica de seleccion</span>
+          <strong>${escapeHtml(debugData.selectedMetric)}</strong>
+        </div>
+        <div class="ai-debug-metric">
           <span>Ultimos datos disponibles</span>
           <strong>${debugData.foundCoverageCount}/${debugData.totalCoverageCount} datos encontrados</strong>
         </div>
       </div>
-      <p class="ai-debug-note">El modelo mostrado corresponde al mejor entrenamiento exportado por `Training.py`, con objetivo minimo de ${debugData.modelTarget}%. La precision tecnica estimada sigue siendo una metrica operativa por paciente basada en cobertura de variables y dataset local.</p>
+      <p class="ai-debug-note">El modelo mostrado corresponde al mejor entrenamiento exportado por Training.py, con objetivo minimo de ${debugData.modelTarget}%. La precision tecnica estimada sigue siendo una metrica operativa por paciente basada en cobertura de variables, senal del caso y dataset local.</p>
     </section>
 
     <section class="ai-debug-section">
-      <strong>Ultimos datos disponibles</strong>
+      <strong>Paciente y cobertura</strong>
       <div class="ai-debug-grid">
         <div class="ai-debug-metric">
           <span>Encontrados</span>
@@ -1322,44 +1395,82 @@ function renderAiDebugWindow() {
           <span>Faltantes</span>
           <strong>${debugData.missingCoverageLabels.length}/${debugData.totalCoverageCount}</strong>
         </div>
+        <div class="ai-debug-metric">
+          <span>Documento</span>
+          <strong>${escapeHtml(patient?.documentId || "sin dato")}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Contexto regional</span>
+          <strong>${escapeHtml(debugData.baseLocation)} base - ${escapeHtml(patient?.locationCity || debugData.baseLocation)}</strong>
+        </div>
       </div>
       <p class="ai-debug-note">Campos detectados: ${escapeHtml(debugData.availableCoverageLabels.join(", ") || "Ninguno")}.</p>
       <p class="ai-debug-note">Campos faltantes en la ultima revision: ${escapeHtml(debugData.missingCoverageLabels.join(", ") || "Ninguno")}.</p>
+      <ul class="ai-debug-list">
+        ${debugData.patientSignalLines.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
     </section>
 
     <section class="ai-debug-section">
       <strong>Metricas del modelo ganador</strong>
       <div class="ai-debug-grid">
         <div class="ai-debug-metric">
-          <span>Metrica de seleccion</span>
-          <strong>${escapeHtml(debugData.selectedMetric)}</strong>
-        </div>
-        <div class="ai-debug-metric">
           <span>AUC-ROC combinado</span>
           <strong>${debugData.combinedAucRoc}%</strong>
         </div>
         <div class="ai-debug-metric">
           <span>Triage</span>
-          <strong>Prec ${debugData.triageMetrics.precision_weighted || 0}% · Sens ${debugData.triageMetrics.sensitivity || 0}% · Esp ${debugData.triageMetrics.specificity || 0}%</strong>
+          <strong>Prec ${debugData.triageMetrics.precision_weighted || 0}% - Sens ${debugData.triageMetrics.sensitivity || 0}% - Esp ${debugData.triageMetrics.specificity || 0}%</strong>
         </div>
         <div class="ai-debug-metric">
           <span>Hospitalizacion</span>
-          <strong>Prec ${debugData.hospitalizationMetrics.precision_weighted || 0}% · Sens ${debugData.hospitalizationMetrics.sensitivity || 0}% · Esp ${debugData.hospitalizationMetrics.specificity || 0}%</strong>
+          <strong>Prec ${debugData.hospitalizationMetrics.precision_weighted || 0}% - Sens ${debugData.hospitalizationMetrics.sensitivity || 0}% - Esp ${debugData.hospitalizationMetrics.specificity || 0}%</strong>
         </div>
         <div class="ai-debug-metric">
           <span>Artefactos</span>
           <strong>${escapeHtml(debugData.modelArtifacts.triageModel || "sin archivo")} | ${escapeHtml(debugData.modelArtifacts.hospitalizationModel || "sin archivo")}</strong>
         </div>
         <div class="ai-debug-metric">
-          <span>Generado</span>
-          <strong>${escapeHtml(debugData.generatedAt || "sin fecha")}</strong>
+          <span>Modelos evaluados</span>
+          <strong>${debugData.candidateCount}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Reentrenamiento</span>
+          <strong>${debugData.retrainedWithAdjustments ? "Se aplicaron ajustes" : "Sin ajustes extra"}</strong>
         </div>
       </div>
+      <p class="ai-debug-note">Precision triage final: ${debugData.triagePrecision}%. Precision hospitalizacion final: ${debugData.hospitalizationPrecision}%. Artefactos utiles detectados: ${debugData.modelArtifactsCount}.</p>
     </section>
 
     <section class="ai-debug-section">
-      <strong>Proceso y entrenamiento</strong>
+      <strong>Entrenamiento y dataset</strong>
       <p>${escapeHtml(debugData.trainingSummary)}</p>
+      <div class="ai-debug-grid">
+        <div class="ai-debug-metric">
+          <span>Pacientes del dataset</span>
+          <strong>${debugData.datasetPatients}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Ubicacion base</span>
+          <strong>${escapeHtml(debugData.baseLocation)}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Edad media</span>
+          <strong>${debugData.meanAge.toFixed(1)} anos</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>O2 media</span>
+          <strong>${debugData.meanOxygen.toFixed(1)}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>FR media</span>
+          <strong>${debugData.meanRespRate.toFixed(1)} rpm</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Falla cardiaca / tabaquismo / GOLD alto</span>
+          <strong>${debugData.heartFailureRate}% / ${debugData.smokingExposureRate}% / ${debugData.goldHighRate}%</strong>
+        </div>
+      </div>
       <div class="ai-debug-log">${escapeHtml(debugData.processLog.join("\n"))}</div>
       <p class="ai-debug-note">Fuentes activas: ${escapeHtml(debugData.sourceFiles)}. Distribucion resumida: ${escapeHtml(debugData.locationSummary)}.</p>
     </section>
@@ -1386,6 +1497,26 @@ function renderAiDebugWindow() {
     </section>
 
     <section class="ai-debug-section">
+      <strong>Detonantes y recomendaciones del caso</strong>
+      <div class="ai-debug-grid">
+        <div class="ai-debug-metric">
+          <span>Detonantes activos</span>
+          <strong>${debugData.triggerLines.length}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Recomendaciones visibles</span>
+          <strong>${debugData.recommendationLines.length}</strong>
+        </div>
+      </div>
+      <ul class="ai-debug-list">
+        ${debugData.triggerLines.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+      <ul class="ai-debug-list">
+        ${debugData.recommendationLines.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </section>
+
+    <section class="ai-debug-section">
       <strong>Matematica usada</strong>
       <div class="ai-debug-code">${escapeHtml(debugData.mathLines.join("\n"))}</div>
       ${
@@ -1398,6 +1529,7 @@ function renderAiDebugWindow() {
     <section class="ai-debug-section">
       <strong>Validacion de matematica heuristica</strong>
       <div class="ai-debug-code">${escapeHtml(riskValidationLines.join("\n"))}</div>
+      <p class="ai-debug-note">${escapeHtml(debugData.validationSummary)}</p>
       <ul class="ai-debug-list">
         ${(debugData.riskMathValidation?.rule_checks || ["Sin reglas documentadas."])
           .map((rule) => `<li>${escapeHtml(rule)}</li>`)
@@ -1405,13 +1537,37 @@ function renderAiDebugWindow() {
       </ul>
     </section>
   `;
+  requestAnimationFrame(applyAiDebugWindowGeometry);
+}
+
+function clampAiDebugSize(size = {}) {
+  const minWidth = Math.min(380, Math.max(320, window.innerWidth - 24));
+  const maxWidth = Math.max(minWidth, window.innerWidth - 24);
+  const minHeight = 260;
+  const availableHeight = window.innerHeight - getTopbarScrollOffset(12) - 12;
+  const maxHeight = Math.max(minHeight, availableHeight);
+
+  return {
+    width: Math.min(Math.max(size.width || 560, minWidth), maxWidth),
+    height: Math.min(Math.max(size.height || 640, minHeight), maxHeight),
+  };
+}
+
+function applyAiDebugWindowGeometry() {
+  if (!aiDebugWindow) return;
+
+  const clampedSize = clampAiDebugSize(state.aiDebugSize);
+  state.aiDebugSize = clampedSize;
+  aiDebugWindow.style.width = `${clampedSize.width}px`;
+  aiDebugWindow.style.height = state.aiDebugMinimized ? "auto" : `${clampedSize.height}px`;
 }
 
 function clampAiDebugWindowPosition() {
   if (!aiDebugWindow || state.aiDebugPosition.x === null || state.aiDebugPosition.y === null) return;
 
-  const width = aiDebugWindow.offsetWidth || 520;
-  const height = aiDebugWindow.offsetHeight || 320;
+  applyAiDebugWindowGeometry();
+  const width = aiDebugWindow.offsetWidth || state.aiDebugSize.width;
+  const height = aiDebugWindow.offsetHeight || (state.aiDebugMinimized ? 90 : state.aiDebugSize.height);
   const maxX = Math.max(12, window.innerWidth - width - 12);
   const maxY = Math.max(getTopbarScrollOffset(4), window.innerHeight - height - 12);
   state.aiDebugPosition.x = Math.min(Math.max(12, state.aiDebugPosition.x), maxX);
@@ -1427,8 +1583,9 @@ function openAiDebugWindow() {
   renderAiDebugWindow();
 
   if (state.aiDebugPosition.x === null || state.aiDebugPosition.y === null) {
+    const preferredWidth = clampAiDebugSize(state.aiDebugSize).width;
     state.aiDebugPosition = {
-      x: Math.max(12, window.innerWidth - Math.min(520, window.innerWidth - 24) - 28),
+      x: Math.max(12, window.innerWidth - preferredWidth - 28),
       y: getTopbarScrollOffset(12),
     };
   }
@@ -1439,6 +1596,7 @@ function openAiDebugWindow() {
 function closeAiDebugWindow() {
   state.aiDebugOpen = false;
   state.aiDebugDrag = null;
+  state.aiDebugResizeSession = null;
   renderAiDebugWindow();
 }
 
@@ -1454,7 +1612,7 @@ function toggleAiDebugMinimize() {
 }
 
 function beginAiDebugDrag(event) {
-  if (!state.aiDebugOpen || !aiDebugWindow) return;
+  if (!state.aiDebugOpen || !aiDebugWindow || state.aiDebugMinimized) return;
   const rect = aiDebugWindow.getBoundingClientRect();
   state.aiDebugDrag = {
     offsetX: event.clientX - rect.left,
@@ -1475,6 +1633,67 @@ function handleAiDebugDrag(event) {
 function stopAiDebugDrag() {
   state.aiDebugDrag = null;
 }
+
+function beginAiDebugResize(direction, event) {
+  if (!state.aiDebugOpen || !aiDebugWindow || state.aiDebugMinimized) return;
+
+  const rect = aiDebugWindow.getBoundingClientRect();
+  state.aiDebugResizeSession = {
+    direction,
+    startX: event.clientX,
+    startY: event.clientY,
+    startWidth: rect.width,
+    startHeight: rect.height,
+    startLeft: rect.left,
+    startTop: rect.top,
+  };
+  state.aiDebugDrag = null;
+}
+
+function handleAiDebugResize(event) {
+  if (!state.aiDebugResizeSession) return;
+
+  const { direction, startX, startY, startWidth, startHeight, startLeft, startTop } = state.aiDebugResizeSession;
+  const deltaX = event.clientX - startX;
+  const deltaY = event.clientY - startY;
+
+  let width = startWidth;
+  let height = startHeight;
+  let left = startLeft;
+  let top = startTop;
+
+  if (direction.includes("e")) {
+    width = startWidth + deltaX;
+  }
+  if (direction.includes("s")) {
+    height = startHeight + deltaY;
+  }
+  if (direction.includes("w")) {
+    width = startWidth - deltaX;
+    left = startLeft + deltaX;
+  }
+  if (direction.includes("n")) {
+    height = startHeight - deltaY;
+    top = startTop + deltaY;
+  }
+
+  const clamped = clampAiDebugSize({ width, height });
+  if (direction.includes("w")) {
+    left = startLeft + (startWidth - clamped.width);
+  }
+  if (direction.includes("n")) {
+    top = startTop + (startHeight - clamped.height);
+  }
+
+  state.aiDebugSize = clamped;
+  state.aiDebugPosition = { x: left, y: top };
+  clampAiDebugWindowPosition();
+}
+
+function stopAiDebugResize() {
+  state.aiDebugResizeSession = null;
+}
+
 
 function computeClinicalAssessment(patient) {
   if (!patient) return null;
@@ -2784,6 +3003,18 @@ window.toggleUserMenu = function toggleUserMenu() {
   userMenu.classList.toggle("visible");
 };
 
+if (mainMenuButton) {
+  mainMenuButton.addEventListener("click", () => {
+    window.toggleMainMenu();
+  });
+}
+
+if (doctorMenuButton) {
+  doctorMenuButton.addEventListener("click", () => {
+    window.toggleUserMenu();
+  });
+}
+
 leftToggle.addEventListener("click", () => {
   const isOpen = leftPanel.style.left === "0px";
   leftPanel.style.left = isOpen ? "-280px" : "0px";
@@ -2808,10 +3039,18 @@ document.addEventListener("click", (event) => {
   if (event.target === widgetPicker) hideWidgetPicker();
   if (event.target === quickAccessPicker) hideQuickAccessPicker();
   if (event.target === devNotice) hideDevNotice();
-  if (!clickedAiDebug && state.aiDebugOpen && !state.aiDebugMinimized) stopAiDebugDrag();
+  if (!clickedAiDebug && state.aiDebugOpen && !state.aiDebugMinimized) {
+    stopAiDebugDrag();
+    stopAiDebugResize();
+  }
 });
 
 document.addEventListener("mousemove", (event) => {
+  if (state.aiDebugResizeSession) {
+    handleAiDebugResize(event);
+    return;
+  }
+
   if (state.aiDebugDrag) {
     handleAiDebugDrag(event);
     return;
@@ -2828,6 +3067,7 @@ document.addEventListener("mousemove", (event) => {
 });
 
 document.addEventListener("mouseup", () => {
+  stopAiDebugResize();
   stopAiDebugDrag();
   stopWidgetResize();
 });
@@ -3211,6 +3451,17 @@ if (aiDebugHeader) {
     const controlButton = event.target.closest("button");
     if (controlButton || event.button !== 0) return;
     beginAiDebugDrag(event);
+  });
+}
+
+if (aiDebugResizeHandles.length) {
+  aiDebugResizeHandles.forEach((handle) => {
+    handle.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      beginAiDebugResize(handle.dataset.aiDebugResize, event);
+    });
   });
 }
 

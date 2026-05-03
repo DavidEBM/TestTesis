@@ -15,8 +15,8 @@ Foxcat Medical es un dashboard clinico visual con estilo pastel, autenticacion F
 - Accesos rapidos personalizables en el panel lateral izquierdo.
 - Panel lateral derecho con resumen del turno y opciones futuras en desarrollo.
 - IA medica explicable con ajuste por contexto clinico y ambiental.
-- Panel tecnico flotante de IA con boton de tuerca, minimizar, cerrar y arrastre libre.
-- Precarga del manifiesto IA desde `index.html` para reducir espera en `login` y `dashboard`.
+- Panel tecnico flotante de IA con boton de tuerca, minimizar, cerrar, arrastre libre y resize por lados y esquinas.
+- Precarga de manifiesto IA, modulos, estilos, imagenes y recurso Excel desde `index.html` para reducir espera en `login` y `dashboard`.
 
 ## IA medica
 
@@ -150,19 +150,42 @@ El widget `IA medica de apoyo` incluye un boton de tuerca.
 Desde ese panel tecnico se puede ver:
 
 - motor activo
+- si la IA entrenada proviene de manifiesto o perfil base
 - modo de calibracion
 - precision tecnica estimada
 - precision del modelo entrenado
+- fecha de generacion del manifiesto
+- metrica usada para seleccionar el modelo
+- metricas de triage y hospitalizacion
+- total de modelos candidatos evaluados
+- estado de reentrenamiento
+- cobertura de datos del paciente y faltantes
+- documento, contexto regional y senal del caso
+- estadisticas del dataset usado para entrenar
 - muestras reducidas del dataset local
 - variables clinicas y regionales activas
+- detonantes y recomendaciones explicables del caso
+- validacion heuristica resumida
 - matematica resumida usada por el motor heuristico
 - traza corta del proceso realizado
 
 La ventana se puede:
 
 - mover libremente por la pantalla
+- redimensionar desde bordes, laterales y esquinas
 - minimizar
 - cerrar
+
+## Precarga y rendimiento
+
+`index.html` ahora:
+
+- precarga `login.js`, `dashboard.js`, `model-loader.js` y `firebase-config.js`
+- precarga `styles.css`, `dashboard.css`, `logo.png`, `profile.png` y `training-manifest.json`
+- abre `preconnect` y `dns-prefetch` para `gstatic` y `jsdelivr`
+- hace warmup de `login.html`, `dashboard.html`, manifiesto y recursos principales antes de redirigir al login
+
+Esto reduce la latencia percibida al entrar por primera vez al login y al dashboard publicado.
 
 ## Colecciones usadas
 

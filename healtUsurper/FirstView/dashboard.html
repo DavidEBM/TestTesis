@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <div class="topbar-left">
-      <button type="button" class="menu-icon" onclick="toggleMainMenu()" aria-label="Abrir menu principal">
+      <button type="button" id="mainMenuButton" class="menu-icon" aria-label="Abrir menu principal">
         <span></span>
         <span></span>
         <span></span>
@@ -26,7 +26,7 @@
 
     <div class="topbar-right">
       <button type="button" id="themeToggleButton" class="theme-toggle">Modo oscuro</button>
-      <button type="button" class="doctor-chip" onclick="toggleUserMenu()" aria-label="Abrir menu del medico">
+      <button type="button" id="doctorMenuButton" class="doctor-chip" aria-label="Abrir menu del medico">
         <img id="doctorPhoto" class="profile" src="profile.png" alt="Foto del medico">
         <div class="doctor-chip-copy">
           <strong id="doctorChipName">Cargando medico...</strong>
@@ -201,7 +201,7 @@
             <span id="aiTrainingBadge" class="soft-badge">Calibrando dataset local...</span>
           </div>
           <div class="widget-head-actions">
-            <button type="button" id="aiDebugToggleButton" class="ai-debug-toggle" aria-label="Abrir panel tecnico de IA">⚙</button>
+            <button type="button" id="aiDebugToggleButton" class="ai-debug-toggle" aria-label="Abrir panel tecnico de IA">&#9881;</button>
             <span class="soft-badge">24h a 1+ mes</span>
           </div>
         </div>
@@ -352,6 +352,14 @@
       </div>
     </div>
     <div id="aiDebugBody" class="ai-debug-body"></div>
+    <span class="ai-debug-resize-handle ai-debug-resize-n" data-ai-debug-resize="n" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-s" data-ai-debug-resize="s" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-e" data-ai-debug-resize="e" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-w" data-ai-debug-resize="w" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-ne" data-ai-debug-resize="ne" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-nw" data-ai-debug-resize="nw" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-se" data-ai-debug-resize="se" aria-hidden="true"></span>
+    <span class="ai-debug-resize-handle ai-debug-resize-sw" data-ai-debug-resize="sw" aria-hidden="true"></span>
   </div>
 
   <script type="module" src="dashboard.js?v=20260503-techpanel-2"></script>
