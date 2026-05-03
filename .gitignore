@@ -26,3 +26,45 @@ yarn-error.log*
 
 # Environment files (local configs)
 /.env.*
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+venv/
+env/
+ENV/
+
+# Local notebooks and test outputs
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dependency folders
+node_modules/
+
+# Build and temporary artifacts
+dist/
+build/
+tmp/
+temp/
+*.tmp
+
+# Python model/cache artifacts generated locally
+*.joblib

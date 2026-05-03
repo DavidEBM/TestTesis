@@ -7,11 +7,12 @@ Este documento esta orientado a informaticos y personal tecnico que necesite ent
 Foxcat Medical es una aplicacion web cliente que:
 
 - inicia en `index.html`
+- precarga un manifiesto IA entrenado antes del login
 - redirige al login en `healtUsurper/login.html`
 - autentica con Firebase Authentication
 - carga el dashboard en `healtUsurper/FirstView/dashboard.html`
 - sincroniza pacientes y preferencias visuales con Firestore
-- usa archivos locales de prueba para el modulo de IA clinica explicable
+- usa un manifiesto exportado por `healtUsurper/test/Training.py` para el modulo de IA clinica explicable
 
 ## 2. Variables importantes
 
@@ -89,6 +90,10 @@ Campos recomendados para entender primero:
 - `placementTarget`: objetivo temporal usado en el flujo de eliminacion
 - `activeResizeWidgetKey`: widget actualmente habilitado para resize fino
 - `resizeSession`: estado temporal del redimensionamiento por bordes
+- `aiDebugOpen`: controla si la ventana tecnica de IA esta visible
+- `aiDebugMinimized`: controla si la ventana tecnica esta minimizada
+- `aiDebugPosition`: posicion libre del panel tecnico flotante
+- `aiDebugDrag`: estado temporal del arrastre del panel tecnico
 
 Posibles modificaciones:
 
@@ -135,6 +140,24 @@ Posibles modificaciones:
 - actualizar medias base
 - cambiar la ciudad base
 - adaptar el perfil a otro conjunto de pacientes
+
+#### `training-manifest.json`
+
+Archivo generado por `healtUsurper/test/Training.py`.
+
+Contiene:
+
+- modelo activo seleccionado
+- metricas de precision y accuracy
+- candidatos evaluados
+- perfil estadistico resumido para el dashboard
+- muestras de datos para depuracion
+
+Ventaja:
+
+- evita recalcular el dataset dentro del dashboard
+- permite precargar la IA desde `index.html`
+- centraliza mantenimiento y actualizaciones del modelo
 
 #### `expectedOxygen`
 
@@ -235,6 +258,28 @@ Revisar:
 - `saveUserLayout()`
 - coleccion `userLayouts`
 
+### 3.4.1 Cambiar el flujo de entrenamiento IA centralizado
+
+Revisar:
+
+- `healtUsurper/test/Training.py`
+- `healtUsurper/ai/training-manifest.json`
+- `healtUsurper/ai/model-loader.js`
+
+Flujo actual:
+
+- `Training.py` carga el Excel
+- crea objetivos de `Triage` y `Hospitalization_Risk`
+- entrena varios modelos candidatos
+- selecciona el mejor por precision combinada
+- si no llega al `90%`, vuelve a intentar con modelos ajustados
+- exporta un manifiesto JSON y artefactos `.joblib`
+
+Importante:
+
+- el navegador no entrena modelos Python directamente
+- `index.html` solo precarga el manifiesto ya generado
+
 ### 3.5 Cambiar comportamiento de resize y cursores
 
 Revisar:
@@ -246,9 +291,51 @@ Revisar:
 
 Posibles modificaciones:
 
-- ampliar o reducir el area sensible de bordes cambiando `edge`
+- ampliar o reducir el area sensible cambiando `outerEdge` e `innerEdge`
 - personalizar los cursores por tema
 - desactivar resize diagonal o vertical si el proyecto lo requiere
+
+### 3.6 Cambiar el scroll compensado del dashboard
+
+Revisar:
+
+- `getTopbarScrollOffset(extra)`
+- `scrollElementIntoViewport(element, options)`
+- `renderWorkspace(title, content)`
+- `scrollToWidgetKey(widgetKey)`
+
+Uso:
+
+- evitar que un bloque quede oculto por la barra superior fija
+- ajustar el margen visual al abrir el `Centro de acciones`
+- reutilizar el scroll compensado para widgets y vistas auxiliares
+
+### 3.7 Cambiar el panel tecnico flotante de IA
+
+Revisar:
+
+- `buildAiDebugData(patient)`
+- `renderAiDebugWindow()`
+- `openAiDebugWindow()`
+- `toggleAiDebugMinimize()`
+- `beginAiDebugDrag(event)`
+- `trainingProfile.selectedModelName`
+- estilos `ai-debug-*` en `dashboard.css`
+
+Que muestra actualmente:
+
+- modelo activo
+- modo de calibracion
+- precision tecnica estimada
+- precision del modelo entrenado
+- datos de prueba reducidos
+- variables clinicas y regionales
+- matematica resumida
+- traza corta del proceso
+
+Precaucion:
+
+- la precision visible es una metrica tecnica interna y no una validacion clinica certificada
 
 ## 4. Diagrama de flujo
 
@@ -259,20 +346,21 @@ flowchart TD
     C -- No --> D[Mostrar formulario de login/registro]
     D --> B
     C -- Si --> E[dashboard.html]
-    E --> F[bootDashboard()]
-    F --> G[setPersistence + onAuthStateChanged]
-    G --> H[loadUserLayout(user.uid)]
-    H --> I[onSnapshot patients]
-    I --> J[renderDashboard()]
-    J --> K[Interacciones del usuario]
-    K --> L[Agregar/editar/eliminar pacientes]
-    K --> M[Editar layout y widgets]
-    K --> N[Usar accesos rapidos]
-    K --> O[Ejecutar IA clinica orientativa]
-    L --> I
-    M --> P[saveUserLayout()]
-    N --> J
-    O --> J
+    E --> F[loadTrainingManifest]
+    F --> G[bootDashboard()]
+    G --> H[setPersistence + onAuthStateChanged]
+    H --> I[loadUserLayout(user.uid)]
+    I --> J[onSnapshot patients]
+    J --> K[renderDashboard()]
+    K --> L[Interacciones del usuario]
+    L --> M[Agregar/editar/eliminar pacientes]
+    L --> N[Editar layout y widgets]
+    L --> O[Usar accesos rapidos]
+    L --> P[Ejecutar IA clinica orientativa]
+    M --> J
+    N --> Q[saveUserLayout()]
+    O --> K
+    P --> K
 ```
 
 ## 5. Diagrama de red aproximado
@@ -283,21 +371,27 @@ Este diagrama es una aproximacion basada solo en lo visible en el codigo actual.
 flowchart LR
     U[Usuario / Navegador]
     I[index.html]
+    M0[training-manifest.json]
     L[login.html + login.js]
     D[dashboard.html + dashboard.js + dashboard.css]
     F[Firebase Authentication]
     FS[Cloud Firestore]
-    T1[230PatientsCOPD.xlsx]
-    T2[conteo_locations.csv]
+    T1[Training.py]
+    T2[230PatientsCOPD.xlsx]
+    T3[conteo_locations.csv]
 
     U --> I
+    I --> M0
     I --> L
     L --> F
+    L --> M0
     F --> D
     D --> FS
-    D --> T1
-    D --> T2
+    D --> M0
     FS --> D
+    T1 --> T2
+    T1 --> T3
+    T1 --> M0
 ```
 
 ## 6. Diagrama / mapa del sitio web
@@ -309,16 +403,18 @@ flowchart TD
     B --> C[Login]
     C --> D[Dashboard principal]
 
-    D --> E[Panel izquierdo<br/>Accesos rapidos]
-    D --> F[Panel derecho<br/>Resumen del turno]
+    D --> E[Panel izquierdo: Accesos rapidos]
+    D --> F[Panel derecho: Resumen del turno]
     D --> G[Menu superior izquierdo]
     D --> H[Menu usuario / medico]
     D --> I[Widgets clinicos]
     D --> J[Workspace / Vista auxiliar]
+    D --> K[Panel tecnico flotante de IA]
 
     E --> J
     G --> J
     I --> J
+    K --> I
     H --> C
 ```
 
@@ -330,16 +426,22 @@ flowchart TD
 - `healtUsurper/FirstView/dashboard.html`: estructura del dashboard
 - `healtUsurper/FirstView/dashboard.css`: estilos, modo oscuro, overlays y layout
 - `healtUsurper/FirstView/dashboard.js`: logica principal de UI, widgets, IA y persistencia
+- `healtUsurper/ai/model-loader.js`: carga y cache del manifiesto IA para index, login y dashboard
+- `healtUsurper/ai/training-manifest.json`: resumen exportado del modelo entrenado
 - `healtUsurper/firebase/firebase-config.js`: inicializacion de Firebase
 - `healtUsurper/firebase/firestore.rules`: reglas de Firestore
 - `healtUsurper/test/230PatientsCOPD.xlsx`: dataset local de apoyo
 - `healtUsurper/test/conteo_locations.csv`: distribucion local por ubicacion
+- `healtUsurper/test/Training.py`: entrenamiento offline, seleccion del mejor modelo y exportacion del manifiesto
 
 ## 8. Recomendaciones para futuras modificaciones
 
 - Si se agrega un widget nuevo, actualizar `dashboard.html`, `widgetCatalog`, `defaultWidgetOrder` y la logica de render.
 - Si se cambia el comportamiento de insercion de widgets, revisar `addWidgetInstantly()` y `getDefaultInsertBeforeKey()`.
 - Si se cambia la experiencia de resize, revisar tanto JS como los cursores SVG embebidos en CSS.
+- Si se ajusta el scroll del dashboard, mantener la compensacion del `topbar` para no ocultar el contenido.
+- Si se cambia el panel tecnico de IA, conservar la transparencia de que la precision es estimada y explicable.
+- Si se cambia la IA, entrenar y exportar primero desde `Training.py` antes de esperar cambios en el dashboard.
 - Si se cambia la IA, mantener separada la parte explicativa de la parte de calculo para que siga siendo auditable.
 - Si se agregan nuevas preferencias de usuario, definir si van a `localStorage`, `userLayouts` o ambas.
 - Si el sistema crece, conviene separar `dashboard.js` en modulos: autenticacion, layout, IA, pacientes, accesos rapidos y render.
@@ -347,5 +449,7 @@ flowchart TD
 ## 9. Limitaciones conocidas
 
 - La IA es orientativa y local al navegador; no es un servicio clinico remoto real.
+- El panel tecnico de IA expone trazas y estadisticas resumidas, pero no reemplaza auditoria clinica formal.
+- El dashboard consume un manifiesto precalculado; si el dataset cambia y no se reejecuta `Training.py`, la IA mostrara informacion desactualizada.
 - El diagrama de red no incluye backend propio porque en el codigo actual no aparece uno distinto de Firebase.
 - El proyecto depende de servir archivos por `localhost` o web server; `file://` no es suficiente para `fetch`.

@@ -18,6 +18,7 @@ import {
   updateDoc,
   updateProfile,
 } from "../firebase/firebase-config.js";
+import { loadTrainingManifest, summarizeActiveModel } from "../ai/model-loader.js";
 
 const defaultWidgetOrder = [
   "overview",
@@ -185,6 +186,19 @@ const fallbackTrainingProfile = {
   heartFailureRate: 0.32,
   smokingExposureRate: 0.63,
   goldHighRate: 0.37,
+  sourceFiles: ["230PatientsCOPD.xlsx", "conteo_locations.csv"],
+  calibrationMode: "Perfil base local de respaldo",
+  sampleRows: [
+    "Edad 67 | O2 93% | FR 20 | GOLD 2 | Tabaquismo exfumador",
+    "Edad 71 | O2 90% | FR 24 | GOLD 3 | Falla cardiaca Si",
+    "Edad 63 | O2 95% | FR 18 | GOLD 1 | Tabaquismo nunca",
+  ],
+  selectedModelName: "Perfil base local sin manifest",
+  selectedModelPrecision: 82,
+  triagePrecision: 82,
+  hospitalizationPrecision: 82,
+  minimumPrecisionTarget: 90,
+  retrainedWithAdjustments: false,
 };
 
 const state = {
@@ -201,6 +215,7 @@ const state = {
   activeResizeWidgetKey: null,
   theme: "light",
   trainingProfile: { ...fallbackTrainingProfile },
+  trainingManifest: null,
   workspaceAction: null,
   hiddenWidgetKeys: [],
   quickAccessItems: [...defaultQuickAccess],
@@ -210,6 +225,10 @@ const state = {
   quickAccessPickerMode: "add",
   placementCommitPending: false,
   resizeSession: null,
+  aiDebugOpen: false,
+  aiDebugMinimized: false,
+  aiDebugPosition: { x: null, y: null },
+  aiDebugDrag: null,
 };
 
 const leftPanel = document.getElementById("leftPanel");
@@ -255,6 +274,12 @@ const saveLayoutButton = document.getElementById("saveLayoutButton");
 const patientOverview = document.getElementById("patientOverview");
 const medicAiWidget = document.getElementById("medicAiWidget");
 const aiTrainingBadge = document.getElementById("aiTrainingBadge");
+const aiDebugToggleButton = document.getElementById("aiDebugToggleButton");
+const aiDebugWindow = document.getElementById("aiDebugWindow");
+const aiDebugHeader = document.getElementById("aiDebugHeader");
+const aiDebugBody = document.getElementById("aiDebugBody");
+const minimizeAiDebugButton = document.getElementById("minimizeAiDebugButton");
+const closeAiDebugButton = document.getElementById("closeAiDebugButton");
 const alertsWidget = document.getElementById("alertsWidget");
 const agendaWidget = document.getElementById("agendaWidget");
 const statusWidget = document.getElementById("statusWidget");
@@ -506,6 +531,30 @@ function applyTheme(theme) {
 function syncTopbarOffset() {
   const measuredHeight = Math.ceil(topbar?.getBoundingClientRect().height || 104);
   document.documentElement.style.setProperty("--topbar-offset", `${measuredHeight + 14}px`);
+}
+
+function getTopbarScrollOffset(extra = 18) {
+  const measuredHeight = Math.ceil(topbar?.getBoundingClientRect().height || 104);
+  return measuredHeight + extra;
+}
+
+function scrollElementIntoViewport(element, options = {}) {
+  if (!element) return;
+
+  const { align = "start", extraOffset = 18, behavior = "smooth" } = options;
+  const rect = element.getBoundingClientRect();
+  const currentY = window.scrollY || window.pageYOffset || 0;
+  const offset = getTopbarScrollOffset(extraOffset);
+  let targetTop = rect.top + currentY - offset;
+
+  if (align === "center") {
+    targetTop = rect.top + currentY - offset - Math.max(0, (window.innerHeight - rect.height) / 2.4);
+  }
+
+  window.scrollTo({
+    top: Math.max(0, Math.round(targetTop)),
+    behavior,
+  });
 }
 
 function getWidgetMinimums(widget) {
@@ -1055,11 +1104,376 @@ function renderPatients() {
 function getPopulationSummary() {
   const training = state.trainingProfile;
   return [
+    `Modelo entrenado: ${training.selectedModelName || "Perfil base"}`,
     `Base local: ${training.datasetPatients} casos de referencia`,
     `Origen principal: ${training.baseLocation}`,
     `Edad promedio referencia: ${training.meanAge.toFixed(0)} anos`,
     `Saturacion base: ${training.meanOxygen.toFixed(0)}%`,
   ];
+}
+
+function getTechnicalPrecision(assessment) {
+  if (!assessment) return 0;
+
+  const datasetFactor = Math.min(1, state.trainingProfile.datasetPatients / 230);
+  const coverageFactor = assessment.confidence / 100;
+  return Math.round((coverageFactor * 0.7 + datasetFactor * 0.3) * 100);
+}
+
+function buildAiDebugData(patient) {
+  const training = state.trainingProfile;
+  const manifest = state.trainingManifest || {};
+  const activeModel = manifest.activeModel || {};
+  const candidateModels = Array.isArray(manifest.candidateModels) ? [...manifest.candidateModels] : [];
+  const rankedCandidates = candidateModels
+    .sort((a, b) => Number(b.combinedPrecision || 0) - Number(a.combinedPrecision || 0))
+    .slice(0, 5);
+  const riskMathValidation = manifest.riskMathValidation || null;
+  const assessment = patient ? computeClinicalAssessment(patient) : null;
+  const region = patient ? regionProfiles[normalizeRegionName(patient.locationCity)] : null;
+  const precision = getTechnicalPrecision(assessment);
+  const modelPrecision = Number(activeModel.combinedPrecision || training.selectedModelPrecision || 0);
+  const coverageFields = [
+    { label: "Saturacion O2", value: patient?.oxygenSaturation },
+    { label: "Frecuencia respiratoria", value: patient?.respiratoryRate },
+    { label: "Pulso", value: patient?.pulse },
+    { label: "Glucosa", value: patient?.glucose },
+    { label: "Creatinina", value: patient?.creatinine },
+    { label: "COPD GOLD", value: patient?.copdGold },
+    { label: "Ciudad clinica", value: patient?.locationCity },
+    { label: "Antecedente cardiaco", value: patient?.heartFailureHistory },
+    { label: "Estado clinico", value: patient?.status },
+    { label: "Tabaquismo", value: patient?.smokingStatus },
+  ];
+  const foundCoverageCount = coverageFields.filter(({ value }) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+    return String(value).trim() !== "";
+  }).length;
+  const availableCoverageLabels = coverageFields
+    .filter(({ value }) => {
+      if (value === null || value === undefined) return false;
+      if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+      return String(value).trim() !== "";
+    })
+    .map(({ label }) => label);
+  const missingCoverageLabels = coverageFields
+    .filter(({ value }) => {
+      if (value === null || value === undefined) return true;
+      if (typeof value === "number") return !Number.isFinite(value) || value === 0;
+      return String(value).trim() === "";
+    })
+    .map(({ label }) => label);
+  const totalCoverageCount = coverageFields.length;
+  const locationSummary = Object.entries(training.locationCounts || {})
+    .slice(0, 4)
+    .map(([location, count]) => `${location}: ${count}`)
+    .join(" | ");
+
+  return {
+    assessment,
+    precision,
+    modelPrecision,
+    modelTarget: Number(training.minimumPrecisionTarget || 90),
+    modelStatus: modelPrecision >= Number(training.minimumPrecisionTarget || 90) ? "Cumple minimo" : "Debajo del minimo",
+    foundCoverageCount,
+    totalCoverageCount,
+    availableCoverageLabels,
+    missingCoverageLabels,
+    modelName: training.selectedModelName || (training.ready
+      ? "Foxcat Explainable Heuristic v1 - calibracion local COPD"
+      : "Foxcat Explainable Heuristic v1 - perfil base de respaldo"),
+    generatedAt: manifest.generatedAt || "",
+    selectedMetric: manifest.selectedMetric || "combined_precision_weighted",
+    modelAdjusted: Boolean(activeModel.adjusted),
+    modelArtifacts: activeModel.artifacts || {},
+    triageMetrics: activeModel.triage || {},
+    hospitalizationMetrics: activeModel.hospitalization || {},
+    combinedAucRoc: Number(activeModel.combinedAucRoc || 0),
+    rankedCandidates,
+    riskMathValidation,
+    calibrationMode: training.calibrationMode || (training.ready ? "Calibracion estadistica local" : "Perfil base local"),
+    trainingSummary: training.ready
+      ? `Training.py cargo ${training.datasetPatients} registros desde ${training.sourceFiles?.join(" + ") || "dataset local"} para recalcular medias, tasas y distribucion por ciudad. Modelo activo: ${training.selectedModelName || "sin nombre"} con precision combinada ${training.selectedModelPrecision || precision}%.`
+      : "No hubo entrenamiento en tiempo real. El motor usa un perfil base de respaldo con medias predefinidas.",
+    sourceFiles: training.sourceFiles?.join(", ") || "Dataset local",
+    sampleRows: training.sampleRows?.length ? training.sampleRows : fallbackTrainingProfile.sampleRows,
+    locationSummary: locationSummary || "Barcelona: 230",
+    activeVariables: [
+      `Edad actual: ${patient?.age || "sin dato"}`,
+      `Saturacion O2: ${patient?.oxygenSaturation || "sin dato"}%`,
+      `Frecuencia respiratoria: ${patient?.respiratoryRate || "sin dato"} rpm`,
+      `Pulso: ${patient?.pulse || "sin dato"} bpm`,
+      `Glucosa: ${patient?.glucose || "sin dato"} mg/dL`,
+      `Creatinina: ${patient?.creatinine || "sin dato"} mg/dL`,
+      `COPD GOLD: ${patient?.copdGold || "sin dato"}`,
+      `Tabaquismo: ${patient?.smokingStatus || "sin dato"}`,
+      `Falla cardiaca: ${patient?.heartFailureHistory || "sin dato"}`,
+      `Region activa: ${region?.label || training.baseLocation}`,
+      `AQI regional: ${region?.airQualityIndex || "sin dato"}`,
+      `Altitud regional: ${region?.altitude || "sin dato"} m`,
+    ],
+    mathLines: assessment
+      ? [
+          `O2 esperada = max(88, ${training.meanOxygen.toFixed(1)} - ajusteRegional ${region?.oxygenAdjustment || 0}) = ${Math.round(assessment.expectedOxygen)}%`,
+          `Riesgo 72h = base + estado + oxigenacion + FR + pulso + glucosa + creatinina + COPD + tabaquismo + falla cardiaca`,
+          `Confianza de entrada = variables presentes / variables evaluadas = ${assessment.confidence}%`,
+          `Cobertura del paciente = ${foundCoverageCount}/${totalCoverageCount} datos relevantes detectados en la ultima revision`,
+          `Precision tecnica estimada = 0.7 * confianza + 0.3 * coberturaDataset = ${precision}%`,
+          `Modelo ganador = ${training.selectedModelName || "sin nombre"} con ${modelPrecision}% sobre minimo ${Number(training.minimumPrecisionTarget || 90)}%`,
+        ]
+      : [
+          "Selecciona un paciente para ver la matematica aplicada por el motor heuristico.",
+        ],
+    processLog: assessment
+      ? [
+          "1. Leer paciente seleccionado desde Firestore sincronizado.",
+          `2. Normalizar ciudad y cargar perfil regional de ${region?.label || training.baseLocation}.`,
+          `3. Comparar saturacion observada (${patient.oxygenSaturation || "sin dato"}%) con saturacion esperada (${Math.round(assessment.expectedOxygen)}%).`,
+          `4. Sumar detonantes clinicos y ambientales para 72h, 1 semana y 1+ mes.`,
+          `5. Generar recomendaciones explicables con ${assessment.triggers.length} detonantes activos.`,
+        ]
+      : [
+          "1. Esperando paciente activo.",
+          "2. El panel mostrara trazas y variables cuando haya un caso seleccionado.",
+        ],
+  };
+}
+
+function renderAiDebugWindow() {
+  if (!aiDebugWindow || !aiDebugBody) return;
+
+  aiDebugWindow.hidden = !state.aiDebugOpen;
+  aiDebugWindow.classList.toggle("minimized", state.aiDebugMinimized);
+  if (minimizeAiDebugButton) {
+    minimizeAiDebugButton.textContent = state.aiDebugMinimized ? "+" : "-";
+  }
+
+  if (!state.aiDebugOpen) return;
+
+  const patient = getSelectedPatient();
+  const debugData = buildAiDebugData(patient);
+  const rankedCandidateItems = debugData.rankedCandidates.length
+    ? debugData.rankedCandidates
+        .map(
+          (candidate, index) => `
+            <li>
+              #${index + 1} ${escapeHtml(candidate.name)} · Precision ${Number(candidate.combinedPrecision || 0)}% · AUC ${Number(candidate.combinedAucRoc || 0)}%${candidate.adjusted ? " · reentrenado" : ""}
+            </li>
+          `
+        )
+        .join("")
+    : `<li>No hay ranking de candidatos disponible.</li>`;
+  const riskValidationLines = debugData.riskMathValidation
+    ? [
+        `AUC-ROC heuristico vs hospitalizacion: ${Math.round(Number(debugData.riskMathValidation.hospitalization_alignment?.auc_roc || 0) * 100)}%`,
+        `Sensibilidad heuristica: ${Math.round(Number(debugData.riskMathValidation.hospitalization_alignment?.sensitivity || 0) * 100)}%`,
+        `Especificidad heuristica: ${Math.round(Number(debugData.riskMathValidation.hospitalization_alignment?.specificity || 0) * 100)}%`,
+        `Spearman O2 vs riesgo: ${Number(debugData.riskMathValidation.monotonic_checks?.oxygen_vs_risk_spearman || 0).toFixed(3)}`,
+        `Spearman FR vs riesgo: ${Number(debugData.riskMathValidation.monotonic_checks?.respiratory_rate_vs_risk_spearman || 0).toFixed(3)}`,
+        `Cobertura de recomendaciones: ${Math.round(Number(debugData.riskMathValidation.recommendation_checks?.recommendation_coverage || 0) * 100)}%`,
+        `Cobertura de detonantes: ${Math.round(Number(debugData.riskMathValidation.recommendation_checks?.trigger_coverage || 0) * 100)}%`,
+      ]
+    : ["Sin bloque de validacion heuristica en el manifiesto actual."];
+  aiDebugBody.innerHTML = `
+    <section class="ai-debug-section">
+      <strong>Motor activo</strong>
+      <div class="ai-debug-grid">
+        <div class="ai-debug-metric">
+          <span>Modelo entrenado</span>
+          <strong>${escapeHtml(debugData.modelName)}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Porcentaje de precision</span>
+          <strong>${debugData.modelPrecision}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Estado frente al minimo</span>
+          <strong>${escapeHtml(debugData.modelStatus)} (${debugData.modelTarget}% minimo)</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Modo de calibracion</span>
+          <strong>${escapeHtml(debugData.calibrationMode)}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Precision tecnica estimada</span>
+          <strong>${debugData.precision}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Paciente analizado</span>
+          <strong>${escapeHtml(patient?.name || "Sin paciente seleccionado")}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Ultimos datos disponibles</span>
+          <strong>${debugData.foundCoverageCount}/${debugData.totalCoverageCount} datos encontrados</strong>
+        </div>
+      </div>
+      <p class="ai-debug-note">El modelo mostrado corresponde al mejor entrenamiento exportado por `Training.py`, con objetivo minimo de ${debugData.modelTarget}%. La precision tecnica estimada sigue siendo una metrica operativa por paciente basada en cobertura de variables y dataset local.</p>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Ultimos datos disponibles</strong>
+      <div class="ai-debug-grid">
+        <div class="ai-debug-metric">
+          <span>Encontrados</span>
+          <strong>${debugData.foundCoverageCount}/${debugData.totalCoverageCount}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Faltantes</span>
+          <strong>${debugData.missingCoverageLabels.length}/${debugData.totalCoverageCount}</strong>
+        </div>
+      </div>
+      <p class="ai-debug-note">Campos detectados: ${escapeHtml(debugData.availableCoverageLabels.join(", ") || "Ninguno")}.</p>
+      <p class="ai-debug-note">Campos faltantes en la ultima revision: ${escapeHtml(debugData.missingCoverageLabels.join(", ") || "Ninguno")}.</p>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Metricas del modelo ganador</strong>
+      <div class="ai-debug-grid">
+        <div class="ai-debug-metric">
+          <span>Metrica de seleccion</span>
+          <strong>${escapeHtml(debugData.selectedMetric)}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>AUC-ROC combinado</span>
+          <strong>${debugData.combinedAucRoc}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Triage</span>
+          <strong>Prec ${debugData.triageMetrics.precision_weighted || 0}% · Sens ${debugData.triageMetrics.sensitivity || 0}% · Esp ${debugData.triageMetrics.specificity || 0}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Hospitalizacion</span>
+          <strong>Prec ${debugData.hospitalizationMetrics.precision_weighted || 0}% · Sens ${debugData.hospitalizationMetrics.sensitivity || 0}% · Esp ${debugData.hospitalizationMetrics.specificity || 0}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Artefactos</span>
+          <strong>${escapeHtml(debugData.modelArtifacts.triageModel || "sin archivo")} | ${escapeHtml(debugData.modelArtifacts.hospitalizationModel || "sin archivo")}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Generado</span>
+          <strong>${escapeHtml(debugData.generatedAt || "sin fecha")}</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Proceso y entrenamiento</strong>
+      <p>${escapeHtml(debugData.trainingSummary)}</p>
+      <div class="ai-debug-log">${escapeHtml(debugData.processLog.join("\n"))}</div>
+      <p class="ai-debug-note">Fuentes activas: ${escapeHtml(debugData.sourceFiles)}. Distribucion resumida: ${escapeHtml(debugData.locationSummary)}.</p>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Ranking de candidatos entrenados</strong>
+      <ul class="ai-debug-list">
+        ${rankedCandidateItems}
+      </ul>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Datos de prueba visibles</strong>
+      <ul class="ai-debug-list">
+        ${debugData.sampleRows.slice(0, 3).map((row) => `<li>${escapeHtml(row)}</li>`).join("")}
+      </ul>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Variables importantes</strong>
+      <ul class="ai-debug-list">
+        ${debugData.activeVariables.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Matematica usada</strong>
+      <div class="ai-debug-code">${escapeHtml(debugData.mathLines.join("\n"))}</div>
+      ${
+        debugData.assessment
+          ? `<p class="ai-debug-note">Ventanas calculadas: 72h ${debugData.assessment.shortRisk}% | 1 semana ${debugData.assessment.weekRisk}% | 1+ mes ${debugData.assessment.longRisk}%.</p>`
+          : `<p class="ai-debug-note">La ventana de riesgos aparecera aqui cuando exista un paciente activo.</p>`
+      }
+    </section>
+
+    <section class="ai-debug-section">
+      <strong>Validacion de matematica heuristica</strong>
+      <div class="ai-debug-code">${escapeHtml(riskValidationLines.join("\n"))}</div>
+      <ul class="ai-debug-list">
+        ${(debugData.riskMathValidation?.rule_checks || ["Sin reglas documentadas."])
+          .map((rule) => `<li>${escapeHtml(rule)}</li>`)
+          .join("")}
+      </ul>
+    </section>
+  `;
+}
+
+function clampAiDebugWindowPosition() {
+  if (!aiDebugWindow || state.aiDebugPosition.x === null || state.aiDebugPosition.y === null) return;
+
+  const width = aiDebugWindow.offsetWidth || 520;
+  const height = aiDebugWindow.offsetHeight || 320;
+  const maxX = Math.max(12, window.innerWidth - width - 12);
+  const maxY = Math.max(getTopbarScrollOffset(4), window.innerHeight - height - 12);
+  state.aiDebugPosition.x = Math.min(Math.max(12, state.aiDebugPosition.x), maxX);
+  state.aiDebugPosition.y = Math.min(Math.max(getTopbarScrollOffset(4), state.aiDebugPosition.y), maxY);
+  aiDebugWindow.style.left = `${state.aiDebugPosition.x}px`;
+  aiDebugWindow.style.top = `${state.aiDebugPosition.y}px`;
+  aiDebugWindow.style.right = "auto";
+}
+
+function openAiDebugWindow() {
+  state.aiDebugOpen = true;
+  state.aiDebugMinimized = false;
+  renderAiDebugWindow();
+
+  if (state.aiDebugPosition.x === null || state.aiDebugPosition.y === null) {
+    state.aiDebugPosition = {
+      x: Math.max(12, window.innerWidth - Math.min(520, window.innerWidth - 24) - 28),
+      y: getTopbarScrollOffset(12),
+    };
+  }
+
+  requestAnimationFrame(clampAiDebugWindowPosition);
+}
+
+function closeAiDebugWindow() {
+  state.aiDebugOpen = false;
+  state.aiDebugDrag = null;
+  renderAiDebugWindow();
+}
+
+function toggleAiDebugMinimize() {
+  if (!state.aiDebugOpen) {
+    openAiDebugWindow();
+    return;
+  }
+
+  state.aiDebugMinimized = !state.aiDebugMinimized;
+  renderAiDebugWindow();
+  requestAnimationFrame(clampAiDebugWindowPosition);
+}
+
+function beginAiDebugDrag(event) {
+  if (!state.aiDebugOpen || !aiDebugWindow) return;
+  const rect = aiDebugWindow.getBoundingClientRect();
+  state.aiDebugDrag = {
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  };
+  aiDebugWindow.style.right = "auto";
+}
+
+function handleAiDebugDrag(event) {
+  if (!state.aiDebugDrag) return;
+  state.aiDebugPosition = {
+    x: event.clientX - state.aiDebugDrag.offsetX,
+    y: event.clientY - state.aiDebugDrag.offsetY,
+  };
+  clampAiDebugWindowPosition();
+}
+
+function stopAiDebugDrag() {
+  state.aiDebugDrag = null;
 }
 
 function computeClinicalAssessment(patient) {
@@ -1798,11 +2212,12 @@ function getResizeDirectionForPointer(widget, clientX, clientY) {
   if (!state.layoutEditMode || state.activeResizeWidgetKey !== widget.dataset.widgetKey) return "";
 
   const rect = widget.getBoundingClientRect();
-  const edge = 30;
-  const nearLeft = clientX >= rect.left && clientX <= rect.left + edge;
-  const nearRight = clientX <= rect.right && clientX >= rect.right - edge;
-  const nearTop = clientY >= rect.top && clientY <= rect.top + edge;
-  const nearBottom = clientY <= rect.bottom && clientY >= rect.bottom - edge;
+  const outerEdge = 12;
+  const innerEdge = 18;
+  const nearLeft = clientX >= rect.left - outerEdge && clientX <= rect.left + innerEdge;
+  const nearRight = clientX <= rect.right + outerEdge && clientX >= rect.right - innerEdge;
+  const nearTop = clientY >= rect.top - outerEdge && clientY <= rect.top + innerEdge;
+  const nearBottom = clientY <= rect.bottom + outerEdge && clientY >= rect.bottom - innerEdge;
 
   const vertical = nearTop ? "n" : nearBottom ? "s" : "";
   const horizontal = nearLeft ? "w" : nearRight ? "e" : "";
@@ -1882,7 +2297,7 @@ function highlightWidget(widgetKey) {
   widget.classList.remove("widget-focus-flash");
   void widget.offsetWidth;
   widget.classList.add("widget-focus-flash");
-  widget.scrollIntoView({ behavior: "smooth", block: "center" });
+  scrollElementIntoViewport(widget, { align: "start", extraOffset: 14 });
   window.setTimeout(() => {
     widget.classList.remove("widget-focus-flash");
   }, 1800);
@@ -1965,7 +2380,7 @@ function renderWorkspace(title, content) {
   workspaceBody.innerHTML = content;
   workspacePanel.hidden = false;
   requestAnimationFrame(() => {
-    workspacePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollElementIntoViewport(workspacePanel, { align: "start", extraOffset: 12 });
   });
 }
 
@@ -1983,7 +2398,7 @@ function scrollToWidgetKey(widgetKey) {
     return;
   }
 
-  widget.scrollIntoView({ behavior: "smooth", block: "center" });
+  scrollElementIntoViewport(widget, { align: "start", extraOffset: 14 });
 }
 
 function triggerQuickAccess(item) {
@@ -2154,7 +2569,7 @@ function renderWorkspaceAction(action) {
 
   if (action === "active-patients") {
     renderWorkspace("Pacientes activos", summarizeDay());
-    document.querySelector('[data-widget-key="patients"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollToWidgetKey("patients");
     return;
   }
 
@@ -2179,7 +2594,7 @@ function renderWorkspaceAction(action) {
 
   if (action === "labs-overview") {
     renderWorkspace("Laboratorios", `<div class="workspace-grid">${buildLabsOverviewMarkup()}</div>`);
-    document.querySelector('[data-widget-key="labs"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollToWidgetKey("labs");
     return;
   }
 
@@ -2291,79 +2706,43 @@ function renderDashboard() {
   doctorPanelPatients.textContent = `Pacientes registrados: ${state.patients.length}`;
   doctorPanelRisk.textContent = `Pacientes en riesgo: ${riskCount}`;
   doctorPanelTraining.textContent = state.trainingProfile.ready
-    ? `Motor IA: calibrado con ${state.trainingProfile.datasetPatients} casos locales`
+    ? `Motor IA: ${state.trainingProfile.selectedModelName} (${state.trainingProfile.selectedModelPrecision}%)`
     : "Motor IA: usando perfil base mientras carga dataset";
+  renderAiDebugWindow();
 }
 
 async function loadClinicalTrainingProfile() {
-  if (!window.XLSX) {
-    aiTrainingBadge.textContent = "Sin libreria XLSX";
-    return;
-  }
-
   try {
-    const [xlsxResponse, csvResponse] = await Promise.all([
-      fetch("../test/230PatientsCOPD.xlsx"),
-      fetch("../test/conteo_locations.csv"),
-    ]);
+    const manifest = await loadTrainingManifest({ forceRefresh: true });
+    const trainingProfile = manifest?.trainingProfile;
+    const activeModel = manifest?.activeModel;
 
-    if (!xlsxResponse.ok) throw new Error("No se pudo abrir 230PatientsCOPD.xlsx");
-    const workbookBuffer = await xlsxResponse.arrayBuffer();
-    const workbook = window.XLSX.read(workbookBuffer, { type: "array" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
-    const cleanedRows = rows.map((row) => {
-      const normalized = {};
-      Object.entries(row).forEach(([key, value]) => {
-        normalized[String(key).trim()] = value;
-      });
-      return normalized;
-    });
-
-    const ageValues = cleanedRows.map((row) => Number(row.Age || 0)).filter(Boolean);
-    const oxygenValues = cleanedRows
-      .map((row) => normalizeOxygenValue(row["Oxygen Saturation"]))
-      .filter(Boolean);
-    const respValues = cleanedRows.map((row) => Number(row["Respiratory Rate"] || 0)).filter(Boolean);
-    const packHistoryValues = cleanedRows.map((row) => Number(row["Pack History"] || 0)).filter((value) => value >= 0);
-    const heartFailureValues = cleanedRows.filter(
-      (row) => normalizeBooleanText(row["History of Heart Failure"]) === "Si"
-    ).length;
-    const smokingExposure = cleanedRows.filter((row) =>
-      ["Activo", "Alta carga"].includes(normalizeSmokingStatus(row["status of smoking"]))
-    ).length;
-    const goldHigh = cleanedRows.filter((row) => Number(row["COPD GOLD"] || 0) >= 3).length;
-
-    let locationCounts = { Barcelona: cleanedRows.length };
-    if (csvResponse.ok) {
-      const csvText = await csvResponse.text();
-      const lines = csvText.trim().split(/\r?\n/).slice(1);
-      locationCounts = {};
-      lines.forEach((line) => {
-        const [location, count] = line.split(",");
-        if (location) locationCounts[location.trim()] = Number(count || 0);
-      });
+    if (!trainingProfile || !activeModel) {
+      throw new Error("El manifiesto IA no trae modelo activo.");
     }
 
     state.trainingProfile = {
+      ...state.trainingProfile,
+      ...trainingProfile,
       ready: true,
-      datasetPatients: cleanedRows.length,
-      baseLocation: Object.keys(locationCounts)[0] || "Barcelona",
-      locationCounts,
-      meanAge: ageValues.reduce((sum, item) => sum + item, 0) / (ageValues.length || 1),
-      meanOxygen: oxygenValues.reduce((sum, item) => sum + item, 0) / (oxygenValues.length || 1),
-      meanRespRate: respValues.reduce((sum, item) => sum + item, 0) / (respValues.length || 1),
-      meanPackHistory: packHistoryValues.reduce((sum, item) => sum + item, 0) / (packHistoryValues.length || 1),
-      heartFailureRate: heartFailureValues / (cleanedRows.length || 1),
-      smokingExposureRate: smokingExposure / (cleanedRows.length || 1),
-      goldHighRate: goldHigh / (cleanedRows.length || 1),
+      selectedModelName: activeModel.name,
+      selectedModelPrecision: activeModel.combinedPrecision,
+      triagePrecision: activeModel.triage?.precision_weighted || trainingProfile.triagePrecision,
+      hospitalizationPrecision:
+        activeModel.hospitalization?.precision_weighted || trainingProfile.hospitalizationPrecision,
+      minimumPrecisionTarget:
+        manifest.minimumPrecisionTarget || trainingProfile.minimumPrecisionTarget || 90,
+      calibrationMode:
+        trainingProfile.calibrationMode || "Entrenamiento supervisado offline con manifiesto reutilizable",
     };
+    state.trainingManifest = manifest;
 
-    aiTrainingBadge.textContent = `IA calibrada con ${state.trainingProfile.datasetPatients} registros`;
-    doctorPanelTraining.textContent = `Motor IA: calibrado con ${state.trainingProfile.datasetPatients} casos locales`;
+    aiTrainingBadge.textContent = summarizeActiveModel(manifest);
+    doctorPanelTraining.textContent = `Motor IA: ${activeModel.name} (${activeModel.combinedPrecision}%)`;
     renderDashboard();
   } catch (error) {
     state.trainingProfile = { ...fallbackTrainingProfile };
+    state.trainingManifest = null;
     aiTrainingBadge.textContent = "Usando perfil base";
     doctorPanelTraining.textContent = "Motor IA: perfil base cargado";
     setStatus(`No se completo la calibracion local: ${error.message}`, "error");
@@ -2421,6 +2800,7 @@ document.addEventListener("click", (event) => {
   const clickedUserMenu = event.target.closest(".doctor-chip") || event.target.closest(".user-menu");
   const clickedContextMenu = event.target.closest(".context-menu");
   const clickedMainMenu = event.target.closest(".main-menu") || event.target.closest(".menu-icon");
+  const clickedAiDebug = event.target.closest(".ai-debug-window") || event.target.closest(".ai-debug-toggle");
 
   if (!clickedUserMenu) userMenu.classList.remove("visible");
   if (!clickedContextMenu) hideContextMenu();
@@ -2428,9 +2808,15 @@ document.addEventListener("click", (event) => {
   if (event.target === widgetPicker) hideWidgetPicker();
   if (event.target === quickAccessPicker) hideQuickAccessPicker();
   if (event.target === devNotice) hideDevNotice();
+  if (!clickedAiDebug && state.aiDebugOpen && !state.aiDebugMinimized) stopAiDebugDrag();
 });
 
 document.addEventListener("mousemove", (event) => {
+  if (state.aiDebugDrag) {
+    handleAiDebugDrag(event);
+    return;
+  }
+
   if (state.resizeSession) {
     handleWidgetResizeMove(event);
     return;
@@ -2442,6 +2828,7 @@ document.addEventListener("mousemove", (event) => {
 });
 
 document.addEventListener("mouseup", () => {
+  stopAiDebugDrag();
   stopWidgetResize();
 });
 
@@ -2495,7 +2882,7 @@ contextMenu.addEventListener("click", (event) => {
   }
 
   if (action === "focus-notes") {
-    document.querySelector('[data-widget-key="notes"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollToWidgetKey("notes");
     return;
   }
 
@@ -2532,7 +2919,7 @@ widgetElements.forEach((widget) => {
     });
 
     if (state.activeResizeWidgetKey) {
-      setStatus("Redimensionado activo en este widget. Arrastra la esquina inferior derecha.", "info");
+      setStatus("Redimensionado activo en este widget. Arrastra desde el borde o una esquina.", "info");
     } else {
       setStatus("Redimensionado desactivado para el widget seleccionado.", "success");
     }
@@ -2792,6 +3179,41 @@ if (removeQuickAccessButton) {
   removeQuickAccessButton.addEventListener("click", showQuickAccessRemovalPicker);
 }
 
+if (aiDebugToggleButton) {
+  aiDebugToggleButton.addEventListener("click", () => {
+    if (state.aiDebugOpen) {
+      state.aiDebugMinimized = false;
+      renderAiDebugWindow();
+      requestAnimationFrame(clampAiDebugWindowPosition);
+      return;
+    }
+
+    openAiDebugWindow();
+  });
+}
+
+if (minimizeAiDebugButton) {
+  minimizeAiDebugButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleAiDebugMinimize();
+  });
+}
+
+if (closeAiDebugButton) {
+  closeAiDebugButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeAiDebugWindow();
+  });
+}
+
+if (aiDebugHeader) {
+  aiDebugHeader.addEventListener("mousedown", (event) => {
+    const controlButton = event.target.closest("button");
+    if (controlButton || event.button !== 0) return;
+    beginAiDebugDrag(event);
+  });
+}
+
 if (widgetPickerGrid) {
   widgetPickerGrid.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-widget-pick]");
@@ -2894,7 +3316,7 @@ workspaceBody.addEventListener("click", (event) => {
   }
 
   if (actionButton.dataset.workspaceAction === "focus-notes") {
-    document.querySelector('[data-widget-key="notes"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollToWidgetKey("notes");
     return;
   }
 
@@ -2990,5 +3412,6 @@ async function bootDashboard() {
 }
 
 window.addEventListener("resize", syncTopbarOffset);
+window.addEventListener("resize", clampAiDebugWindowPosition);
 
 bootDashboard();

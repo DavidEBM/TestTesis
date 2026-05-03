@@ -200,7 +200,10 @@
             <h3>IA medica de apoyo</h3>
             <span id="aiTrainingBadge" class="soft-badge">Calibrando dataset local...</span>
           </div>
-          <span class="soft-badge">24h a 1+ mes</span>
+          <div class="widget-head-actions">
+            <button type="button" id="aiDebugToggleButton" class="ai-debug-toggle" aria-label="Abrir panel tecnico de IA">⚙</button>
+            <span class="soft-badge">24h a 1+ mes</span>
+          </div>
         </div>
         <div id="medicAiWidget" class="medic-ai-widget"></div>
       </section>
@@ -337,6 +340,20 @@
     </section>
   </main>
 
-  <script type="module" src="dashboard.js"></script>
+  <div id="aiDebugWindow" class="ai-debug-window" hidden>
+    <div id="aiDebugHeader" class="ai-debug-header">
+      <div>
+        <span class="eyebrow">IA tecnica</span>
+        <strong>Panel de depuracion clinica</strong>
+      </div>
+      <div class="ai-debug-controls">
+        <button type="button" id="minimizeAiDebugButton" class="ai-debug-control" aria-label="Minimizar panel tecnico">-</button>
+        <button type="button" id="closeAiDebugButton" class="ai-debug-control" aria-label="Cerrar panel tecnico">x</button>
+      </div>
+    </div>
+    <div id="aiDebugBody" class="ai-debug-body"></div>
+  </div>
+
+  <script type="module" src="dashboard.js?v=20260503-techpanel-2"></script>
 </body>
 </html>
