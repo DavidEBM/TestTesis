@@ -358,26 +358,32 @@ Precaucion:
 
 ```mermaid
 flowchart TD
-    A[index.html] --> B[healtUsurper/login.html]
-    B --> C{Usuario autenticado?}
-    C -- No --> D[Mostrar formulario de login/registro]
+    A["index.html"] --> B["healthUsurper/login.html"]
+    
+    B --> C{"¿Usuario autenticado?"}
+    
+    C -- "No" --> D["Mostrar formulario de login / registro"]
     D --> B
-    C -- Si --> E[dashboard.html]
-    E --> F[loadTrainingManifest]
-    F --> G[bootDashboard()]
-    G --> H[setPersistence + onAuthStateChanged]
-    H --> I[loadUserLayout(user.uid)]
-    I --> J[onSnapshot patients]
-    J --> K[renderDashboard()]
-    K --> L[Interacciones del usuario]
-    L --> M[Agregar/editar/eliminar pacientes]
-    L --> N[Editar layout y widgets]
-    L --> O[Usar accesos rapidos]
-    L --> P[Ejecutar IA clinica orientativa]
-    M --> J
-    N --> Q[saveUserLayout()]
-    O --> K
-    P --> K
+    
+    C -- "Sí" --> E["dashboard.html"]
+    
+    E --> F["bootDashboard()"]
+    F --> G["setPersistence + onAuthStateChanged"]
+    G --> H["loadUserLayout(user.uid)"]
+    H --> I["onSnapshot (patients)"]
+    I --> J["renderDashboard()"]
+    
+    J --> K["Interacciones del usuario"]
+    
+    K --> L["Agregar / editar / eliminar pacientes"]
+    K --> M["Editar layout y widgets"]
+    K --> N["Usar accesos rápidos"]
+    K --> O["Ejecutar IA clínica orientativa"]
+    
+    L --> I
+    M --> P["saveUserLayout()"]
+    N --> J
+    O --> J
 ```
 
 ## 5. Diagrama de red aproximado
