@@ -53,5 +53,5 @@ export async function loadTrainingManifest({ forceRefresh = false } = {}) {
 export function summarizeActiveModel(manifest) {
   const activeModel = manifest?.activeModel;
   if (!activeModel) return "Modelo IA no cargado";
-  return `${activeModel.name} · ${activeModel.combinedPrecision}%`;
+  return `${activeModel.name} - ${activeModel.combinedPrecision}%`;
 }

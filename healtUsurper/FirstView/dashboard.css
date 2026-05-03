@@ -1521,6 +1521,8 @@ body.dark-mode .ai-summary p{
   top:138px;
   right:28px;
   width:min(520px, calc(100vw - 24px));
+  min-width:min(380px, calc(100vw - 24px));
+  min-height:260px;
   max-height:min(72vh, 760px);
   display:grid;
   grid-template-rows:auto minmax(0, 1fr);
@@ -1539,6 +1541,7 @@ body.dark-mode .ai-summary p{
 .ai-debug-window.minimized{
   width:min(360px, calc(100vw - 24px));
   max-height:none;
+  min-height:0;
 }
 
 .ai-debug-window.minimized .ai-debug-body{
@@ -1582,6 +1585,88 @@ body.dark-mode .ai-debug-header{
   display:grid;
   gap:14px;
   scrollbar-width:thin;
+}
+
+.ai-debug-resize-handle{
+  position:absolute;
+  z-index:2;
+}
+
+.ai-debug-resize-n,
+.ai-debug-resize-s{
+  left:18px;
+  right:18px;
+  height:10px;
+}
+
+.ai-debug-resize-n{
+  top:-4px;
+  cursor:n-resize;
+}
+
+.ai-debug-resize-s{
+  bottom:-4px;
+  cursor:s-resize;
+}
+
+.ai-debug-resize-e,
+.ai-debug-resize-w{
+  top:18px;
+  bottom:18px;
+  width:10px;
+}
+
+.ai-debug-resize-e{
+  right:-4px;
+  cursor:e-resize;
+}
+
+.ai-debug-resize-w{
+  left:-4px;
+  cursor:w-resize;
+}
+
+.ai-debug-resize-ne,
+.ai-debug-resize-nw,
+.ai-debug-resize-se,
+.ai-debug-resize-sw{
+  width:18px;
+  height:18px;
+}
+
+.ai-debug-resize-ne{
+  top:-4px;
+  right:-4px;
+  cursor:ne-resize;
+}
+
+.ai-debug-resize-nw{
+  top:-4px;
+  left:-4px;
+  cursor:nw-resize;
+}
+
+.ai-debug-resize-se{
+  right:-4px;
+  bottom:-4px;
+  cursor:se-resize;
+}
+
+.ai-debug-resize-sw{
+  left:-4px;
+  bottom:-4px;
+  cursor:sw-resize;
+}
+
+.ai-debug-window.minimized .ai-debug-resize-n,
+.ai-debug-window.minimized .ai-debug-resize-s,
+.ai-debug-window.minimized .ai-debug-resize-e,
+.ai-debug-window.minimized .ai-debug-resize-w,
+.ai-debug-window.minimized .ai-debug-resize-ne,
+.ai-debug-window.minimized .ai-debug-resize-nw,
+.ai-debug-window.minimized .ai-debug-resize-se,
+.ai-debug-window.minimized .ai-debug-resize-sw{
+  display:none;
 }
 
 .ai-debug-section{

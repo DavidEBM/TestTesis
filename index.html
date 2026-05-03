@@ -4,6 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Foxcat AI Boot</title>
+<link rel="modulepreload" href="healtUsurper/login.js?v=20260503-techpanel-2">
+<link rel="modulepreload" href="healtUsurper/FirstView/dashboard.js?v=20260503-techpanel-2">
+<link rel="modulepreload" href="healtUsurper/ai/model-loader.js">
+<link rel="modulepreload" href="healtUsurper/firebase/firebase-config.js">
+<link rel="preload" href="healtUsurper/styles.css" as="style">
+<link rel="preload" href="healtUsurper/FirstView/dashboard.css" as="style">
+<link rel="preload" href="healtUsurper/logo.png" as="image">
+<link rel="preload" href="healtUsurper/FirstView/profile.png" as="image">
+<link rel="preload" href="healtUsurper/ai/training-manifest.json" as="fetch" crossorigin="anonymous">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="dns-prefetch" href="//www.gstatic.com">
+<link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" as="script" crossorigin="anonymous">
 
 <style>
 *{
@@ -65,7 +79,7 @@ margin-bottom:15px;
 .logo img{
 width:90px;
 height:auto;
-filter: drop-shadow(0 10px 18px rgba(196, 177, 213, 0.35));
+filter:drop-shadow(0 10px 18px rgba(196,177,213,0.35));
 }
 
 .title{
@@ -175,9 +189,9 @@ const steps=[
   "Loading Clinical Prediction Engine...",
   "Synchronizing Medical Records...",
   "Initializing Triage Analysis AI...",
+  "Priming Login And Dashboard Assets...",
   "Starting Monitoring Services...",
   "Running Diagnostic Protocols...",
-  "System Integrity Check...",
   "Preparing Medical Dashboard..."
 ];
 
@@ -194,8 +208,8 @@ function addLine(text){
   terminal.scrollTop=terminal.scrollHeight;
 }
 
-const min=5000;
-const max=15000;
+const min=2600;
+const max=5200;
 const total=Math.random()*(max-min)+min;
 const interval=total/100;
 let progress=0;
@@ -219,7 +233,40 @@ async function preloadAiManifest(){
   }
 }
 
+async function warmBootAssets(){
+  const assetsToWarm=[
+    "healtUsurper/login.html",
+    "healtUsurper/styles.css",
+    "healtUsurper/login.js?v=20260503-techpanel-2",
+    "healtUsurper/FirstView/dashboard.html",
+    "healtUsurper/FirstView/dashboard.css",
+    "healtUsurper/FirstView/dashboard.js?v=20260503-techpanel-2",
+    "healtUsurper/firebase/firebase-config.js",
+    "healtUsurper/ai/model-loader.js",
+    "healtUsurper/ai/training-manifest.json",
+    "healtUsurper/logo.png",
+    "healtUsurper/FirstView/profile.png"
+  ];
+
+  addLine("Priming login and dashboard assets...");
+  const sameOriginWarmup=assetsToWarm.map((url)=>
+    fetch(url,{ cache:"force-cache" }).catch((error)=>{
+      addLine(`Warmup warning: ${url} -> ${error.message}`);
+    })
+  );
+
+  const externalWarmup=fetch(
+    "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+    { cache:"force-cache", mode:"cors", credentials:"omit" }
+  ).catch((error)=>{
+    addLine(`XLSX preload warning: ${error.message}`);
+  });
+
+  return Promise.allSettled([...sameOriginWarmup, externalWarmup]);
+}
+
 const manifestPromise=preloadAiManifest();
+const warmupPromise=warmBootAssets();
 
 const loader=setInterval(()=>{
   progress++;
@@ -233,9 +280,9 @@ const loader=setInterval(()=>{
 
   if(progress>=100){
     clearInterval(loader);
-    status.textContent=manifestLoaded ? `System Ready · ${manifestSummary}` : "System Ready";
+    status.textContent=manifestLoaded ? `System Ready - ${manifestSummary}` : "System Ready";
 
-    manifestPromise.finally(()=>{
+    Promise.allSettled([manifestPromise, warmupPromise]).finally(()=>{
       window.location.href="healtUsurper/login.html";
     });
   }
