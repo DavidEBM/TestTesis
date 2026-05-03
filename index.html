@@ -156,7 +156,9 @@ letter-spacing:1px;
   </div>
 </div>
 
-<script>
+<script type="module">
+import { loadTrainingManifest, summarizeActiveModel } from "./healtUsurper/ai/model-loader.js";
+
 for(let i=0;i<35;i++){
   const p=document.createElement("div");
   p.className="particle";
@@ -181,6 +183,8 @@ const steps=[
 
 const terminal=document.getElementById("terminal");
 let stepIndex=0;
+let manifestSummary="Manifest IA pendiente";
+let manifestLoaded=false;
 
 function addLine(text){
   const line=document.createElement("div");
@@ -200,6 +204,23 @@ const bar=document.getElementById("progress");
 const percent=document.getElementById("percent");
 const status=document.getElementById("status");
 
+async function preloadAiManifest(){
+  try{
+    addLine("Loading trained IA manifest...");
+    const manifest=await loadTrainingManifest({ forceRefresh:true });
+    manifestSummary=summarizeActiveModel(manifest);
+    manifestLoaded=true;
+    addLine(`Trained model ready: ${manifestSummary}`);
+    if((manifest?.activeModel?.combinedPrecision||0)<90){
+      addLine("Warning: trained precision under target. Run Training.py again.");
+    }
+  }catch(error){
+    addLine(`IA preload warning: ${error.message}`);
+  }
+}
+
+const manifestPromise=preloadAiManifest();
+
 const loader=setInterval(()=>{
   progress++;
   bar.style.width=progress+"%";
@@ -212,11 +233,11 @@ const loader=setInterval(()=>{
 
   if(progress>=100){
     clearInterval(loader);
-    status.textContent="System Ready";
+    status.textContent=manifestLoaded ? `System Ready · ${manifestSummary}` : "System Ready";
 
-    setTimeout(()=>{
+    manifestPromise.finally(()=>{
       window.location.href="healtUsurper/login.html";
-    },800);
+    });
   }
 },interval);
 </script>

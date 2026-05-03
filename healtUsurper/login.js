@@ -6,6 +6,7 @@ import {
   setPersistence,
   signInWithEmailAndPassword,
 } from "./firebase/firebase-config.js";
+import { loadTrainingManifest, summarizeActiveModel } from "./ai/model-loader.js";
 
 const authForm = document.getElementById("authForm");
 const emailInput = document.getElementById("email");
@@ -25,6 +26,15 @@ function applyTheme(theme) {
   document.body.classList.toggle("dark-mode", normalizedTheme === "dark");
   themeToggleButton.textContent = normalizedTheme === "dark" ? "Modo claro" : "Modo oscuro";
   localStorage.setItem("foxcat-theme", normalizedTheme);
+}
+
+async function syncTrainingManifestStatus() {
+  try {
+    const manifest = await loadTrainingManifest();
+    setStatus(`Modelo IA preparado: ${summarizeActiveModel(manifest)}. Puedes iniciar sesion.`, "success");
+  } catch (error) {
+    setStatus(`No se pudo precargar el manifiesto IA: ${error.message}`, "error");
+  }
 }
 
 async function loginUser(event) {
@@ -69,6 +79,7 @@ themeToggleButton.addEventListener("click", () => {
 });
 
 applyTheme(localStorage.getItem("foxcat-theme") || "light");
+syncTrainingManifestStatus();
 
 onAuthStateChanged(auth, (user) => {
   if (user) {
