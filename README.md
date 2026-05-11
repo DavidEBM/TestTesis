@@ -169,6 +169,24 @@ Desde ese panel tecnico se puede ver:
 - matematica resumida usada por el motor heuristico
 - traza corta del proceso realizado
 
+## Ciclo de entrenamiento IA
+
+El entrenamiento no ocurre dentro del navegador. El flujo actual es offline y manual:
+
+- `healtUsurper/test/Training.py` lee `230PatientsCOPD.xlsx` y `conteo_locations.csv`.
+- entrena varios modelos candidatos para triage y hospitalizacion.
+- calcula metricas combinadas y selecciona el mejor candidato por precision/AUC.
+- guarda el resultado ganador en `healtUsurper/ai/training-manifest.json`.
+- exporta tambien los artefactos `triage-model.joblib` y `hospitalization-model.joblib`.
+
+Puntos importantes para operacion y futuras actualizaciones:
+
+- el dashboard solo consume el manifiesto ya exportado; no reentrena automaticamente.
+- los pacientes nuevos guardados desde la pagina en Firestore no entran al modelo por si solos.
+- para incluir pacientes nuevos en la IA hay que consolidarlos en el dataset fuente y volver a ejecutar `Training.py`.
+- la "mejor precision" visible en el panel tecnico corresponde al ultimo manifiesto ganador exportado, no a un entrenamiento en vivo.
+- si cambian las reglas heuristicas del riesgo en `dashboard.js`, conviene volver a contrastarlas con el dataset y regenerar el manifiesto.
+
 La ventana se puede:
 
 - mover libremente por la pantalla
