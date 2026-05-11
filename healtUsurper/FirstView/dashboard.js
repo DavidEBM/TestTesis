@@ -20,6 +20,8 @@ import {
 } from "../firebase/firebase-config.js";
 import { loadTrainingManifest, summarizeActiveModel } from "../ai/model-loader.js";
 
+const DEFAULT_ALTITUDE_METERS = 12;
+
 const defaultWidgetOrder = [
   "overview",
   "medic-ai",
@@ -158,6 +160,20 @@ const regionProfiles = {
     respiratoryStress: 1.09,
     recommendationFocus: "vigilar sintomas respiratorios y carga cardiovascular por altitud media",
   },
+  Bogota: {
+    label: "Bogota",
+    altitude: 2640,
+    careFocus: "altitud alta con reserva respiratoria exigida y mayor carga cardiovascular",
+    accessPressure: 1.13,
+    oxygenAdjustment: 3.2,
+    climate: "frio urbano de altura",
+    temperatureC: 14,
+    airQuality: "variable urbana",
+    airQualityIndex: 82,
+    humidity: 69,
+    respiratoryStress: 1.16,
+    recommendationFocus: "vigilar desaturacion, disnea de esfuerzo y descompensacion cardiopulmonar en altura",
+  },
   Ipiales: {
     label: "Ipiales",
     altitude: 2890,
@@ -183,10 +199,17 @@ const fallbackTrainingProfile = {
   meanOxygen: 94,
   meanRespRate: 18,
   meanPackHistory: 22,
+  meanAltitude: 12,
   heartFailureRate: 0.32,
   smokingExposureRate: 0.63,
   goldHighRate: 0.37,
-  sourceFiles: ["230PatientsCOPD.xlsx", "conteo_locations.csv"],
+  respiratoryFailureRate: 0.29,
+  cardiacFailureRate: 0.24,
+  dangerousSymptomRate: 0.31,
+  highPackHistoryRate: 0.28,
+  locationElevations: { Barcelona: 12, Cali: 1018, Medellin: 1495, Pasto: 2527, Bogota: 2640, Ipiales: 2890 },
+  specializedOutcomes: {},
+  sourceFiles: ["230PatientsCOPD.xlsx", "COPD_Patients_Database.xlsx", "Locations_Elevation.csv"],
   calibrationMode: "Perfil base local de respaldo",
   sampleRows: [
     "Edad 67 | O2 93% | FR 20 | GOLD 2 | Tabaquismo exfumador",
@@ -399,12 +422,71 @@ function createAvatarDataUri(label, colorA = "#f2c8d7", colorB = "#c4d7f2") {
 function normalizeRegionName(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "Barcelona";
+  if (raw.includes("bogot")) return "Bogota";
   if (raw.includes("pasto")) return "Pasto-Narino";
   if (raw.includes("medell")) return "Medellin";
   if (raw.includes("cali")) return "Cali";
   if (raw.includes("ipiales")) return "Ipiales";
   if (raw.includes("barcelona")) return "Barcelona";
   return "Barcelona";
+}
+
+function normalizeLocationRiskLevel(value) {
+  const match = String(value || "").match(/risk\s*(\d+)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function parseNumericOrKeyword(value, fallback = 0) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return Number(fallback || 0);
+  if (raw === "higher" || raw === "high") return 108;
+  if (raw === "normal") return 82;
+  if (raw === "lower" || raw === "low") return 58;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : Number(fallback || 0);
+}
+
+function mapBloodPressureCategory(value) {
+  const raw = String(value || "").trim().toLowerCase().replaceAll(" ", "");
+  if (raw === "crisis") return { systolic: 185, diastolic: 118 };
+  if (raw === "stage2") return { systolic: 168, diastolic: 102 };
+  if (raw === "higher") return { systolic: 156, diastolic: 96 };
+  if (raw === "stage1") return { systolic: 146, diastolic: 92 };
+  if (raw === "elevate") return { systolic: 132, diastolic: 86 };
+  return { systolic: 120, diastolic: 78 };
+}
+
+function getLocationElevationMeters(locationCity) {
+  const normalized = normalizeRegionName(locationCity);
+  const manifestElevations = state.trainingProfile?.locationElevations || {};
+  const manifestKey = Object.keys(manifestElevations).find(
+    (key) => normalizeRegionName(key) === normalized
+  );
+  if (manifestKey) return Number(manifestElevations[manifestKey] || 0) || DEFAULT_ALTITUDE_METERS;
+
+  const region = regionProfiles[normalized];
+  return Number(region?.altitude || DEFAULT_ALTITUDE_METERS);
+}
+
+function getRegionProfile(locationCity) {
+  const normalized = normalizeRegionName(locationCity);
+  const baseRegion = regionProfiles[normalized] || regionProfiles.Barcelona;
+  const altitude = getLocationElevationMeters(locationCity);
+  const altitudeDelta = altitude - Number(baseRegion.altitude || DEFAULT_ALTITUDE_METERS);
+  return {
+    ...baseRegion,
+    altitude,
+    oxygenAdjustment: Math.max(0, Number(baseRegion.oxygenAdjustment || 0) + Math.max(0, altitudeDelta / 1200)),
+  };
+}
+
+function getRawField(raw, ...keys) {
+  for (const key of keys) {
+    if (raw?.[key] !== undefined && raw?.[key] !== null && String(raw[key]).trim() !== "") {
+      return raw[key];
+    }
+  }
+  return "";
 }
 
 function normalizeOxygenValue(value) {
@@ -442,6 +524,7 @@ function getStatusClass(status = "Estable") {
 function getRiskScore(patient) {
   let score = 0;
   const oxygen = normalizeOxygenValue(patient.oxygenSaturation);
+  const elevation = Number(patient.locationElevationM || getLocationElevationMeters(patient.locationCity));
 
   if (patient.status === "Critico") score += 5;
   else if (patient.status === "Riesgo") score += 3;
@@ -453,12 +536,18 @@ function getRiskScore(patient) {
   if (patient.respiratoryRate >= 24) score += 2;
   if (Number(patient.copdGold) >= 3) score += 2;
   if (patient.heartFailureHistory === "Si") score += 2;
+  if (Number(patient.packHistory || 0) >= 40) score += 2;
+  if (elevation >= 2400 && patient.smokingStatus !== "Nunca") score += 2;
+  else if (elevation >= 1400 && ["Activo", "Alta carga"].includes(patient.smokingStatus)) score += 1;
 
   return score;
 }
 
 function normalizePatient(patientDoc) {
   const data = patientDoc.data();
+  const normalizedCity = regionProfiles[normalizeRegionName(data.locationCity)]?.label || "Barcelona";
+  const derivedElevation = Number(data.locationElevationM || data.locationElevationMeters || 0) || getLocationElevationMeters(normalizedCity);
+  const derivedRiskLevel = Number(data.locationRiskLevel || 0) || normalizeLocationRiskLevel(data.locationCity);
 
   return {
     id: patientDoc.id,
@@ -483,10 +572,13 @@ function normalizePatient(patientDoc) {
     oxygenSaturation: normalizeOxygenValue(data.oxygenSaturation),
     respiratoryRate: Number(data.respiratoryRate || 0),
     bmi: Number(data.bmi || 0),
+    packHistory: Number(data.packHistory || 0),
     copdGold: Number(data.copdGold || 0),
     smokingStatus: normalizeSmokingStatus(data.smokingStatus),
     heartFailureHistory: normalizeBooleanText(data.heartFailureHistory),
-    locationCity: regionProfiles[normalizeRegionName(data.locationCity)]?.label || "Barcelona",
+    locationCity: normalizedCity,
+    locationElevationM: derivedElevation,
+    locationRiskLevel: derivedRiskLevel,
     createdBy: data.createdBy || "",
     statusClass: getStatusClass(data.status || "Estable"),
   };
@@ -687,32 +779,55 @@ async function saveUserLayout() {
 }
 
 function sanitizePatientPayload(raw) {
+  const rawLocation = getRawField(raw, "locationCity", "Ciudad", "Location");
+  const normalizedCity = regionProfiles[normalizeRegionName(rawLocation)]?.label || "Barcelona";
+  const bloodPressureCategory = getRawField(raw, "Blood pressure");
+  const derivedPressure = mapBloodPressureCategory(bloodPressureCategory);
+  const oxygenSaturation = normalizeOxygenValue(getRawField(raw, "oxygenSaturation", "SaturacionO2", "Oxygen Saturation"));
+  const respiratoryRate = Number(getRawField(raw, "respiratoryRate", "FrecuenciaRespiratoria", "Respiratory Rate") || 0);
+  const pulse = parseNumericOrKeyword(getRawField(raw, "pulse", "Pulso", "Heart Rate"), 0);
+  const copdGold = Number(getRawField(raw, "copdGold", "COPD GOLD") || 0);
+  const heartFailureHistory = normalizeBooleanText(
+    getRawField(raw, "heartFailureHistory", "FallaCardiaca", "History of Heart Failure")
+  );
+  const packHistory = Number(getRawField(raw, "packHistory", "Pack History") || 0);
+  const derivedStatus =
+    String(getRawField(raw, "status", "Estado") || "").trim() ||
+    (oxygenSaturation < 89 || respiratoryRate >= 30 || copdGold >= 4
+      ? "Critico"
+      : oxygenSaturation < 93 || respiratoryRate >= 24 || heartFailureHistory === "Si"
+        ? "Riesgo"
+        : "Estable");
+
   return {
-    name: String(raw.name || "").trim(),
-    documentId: String(raw.documentId || "").trim(),
-    age: Number(raw.age || 0),
-    condition: String(raw.condition || "").trim(),
-    status: String(raw.status || "Estable").trim() || "Estable",
-    photoUrl: String(raw.photoUrl || "").trim(),
-    bloodPressureSystolic: Number(raw.bloodPressureSystolic || 0),
-    bloodPressureDiastolic: Number(raw.bloodPressureDiastolic || 0),
-    pulse: Number(raw.pulse || 0),
-    glucose: Number(raw.glucose || 0),
-    hemoglobin: Number(raw.hemoglobin || 0),
-    creatinine: Number(raw.creatinine || 0),
-    oxygenSaturation: normalizeOxygenValue(raw.oxygenSaturation),
-    respiratoryRate: Number(raw.respiratoryRate || 0),
-    bmi: Number(raw.bmi || 0),
-    copdGold: Number(raw.copdGold || 0),
-    smokingStatus: normalizeSmokingStatus(raw.smokingStatus),
-    heartFailureHistory: normalizeBooleanText(raw.heartFailureHistory),
-    locationCity: regionProfiles[normalizeRegionName(raw.locationCity)]?.label || "Barcelona",
-    ward: String(raw.ward || "").trim(),
-    room: String(raw.room || "").trim(),
-    appointmentTime: String(raw.appointmentTime || "").trim(),
-    monitoringTime: String(raw.monitoringTime || "").trim(),
-    labTime: String(raw.labTime || "").trim(),
-    notes: String(raw.notes || "").trim(),
+    name: String(getRawField(raw, "name", "Nombre") || `Paciente EPOC ${getRawField(raw, "ID Number", "ID Number\n", "documentId", "Documento") || "sin-id"}`).trim(),
+    documentId: String(getRawField(raw, "documentId", "Documento", "ID Number", "ID Number\n") || "").trim(),
+    age: Number(getRawField(raw, "age", "Edad", "Age") || 0),
+    condition: String(getRawField(raw, "condition", "Condicion", "Condition") || "EPOC").trim(),
+    status: derivedStatus,
+    photoUrl: String(getRawField(raw, "photoUrl", "Foto") || "").trim(),
+    bloodPressureSystolic: Number(getRawField(raw, "bloodPressureSystolic") || derivedPressure.systolic || 0),
+    bloodPressureDiastolic: Number(getRawField(raw, "bloodPressureDiastolic") || derivedPressure.diastolic || 0),
+    pulse,
+    glucose: Number(getRawField(raw, "glucose", "Glucosa") || 0),
+    hemoglobin: Number(getRawField(raw, "hemoglobin", "Hemoglobina") || 0),
+    creatinine: Number(getRawField(raw, "creatinine", "Creatinina") || 0),
+    oxygenSaturation,
+    respiratoryRate,
+    bmi: Number(getRawField(raw, "bmi", "BMI, kg/m2") || 0),
+    packHistory,
+    copdGold,
+    smokingStatus: normalizeSmokingStatus(getRawField(raw, "smokingStatus", "status of smoking", "Tabaquismo")),
+    heartFailureHistory,
+    locationCity: normalizedCity,
+    locationElevationM: Number(getRawField(raw, "locationElevationM", "locationElevationMeters") || 0) || getLocationElevationMeters(normalizedCity),
+    locationRiskLevel: Number(getRawField(raw, "locationRiskLevel") || 0) || normalizeLocationRiskLevel(rawLocation),
+    ward: String(getRawField(raw, "ward", "Area", "working place") || "").trim(),
+    room: String(getRawField(raw, "room", "Habitacion") || "").trim(),
+    appointmentTime: String(getRawField(raw, "appointmentTime") || "").trim(),
+    monitoringTime: String(getRawField(raw, "monitoringTime") || "").trim(),
+    labTime: String(getRawField(raw, "labTime") || "").trim(),
+    notes: String(getRawField(raw, "notes", "Notas") || "").trim(),
   };
 }
 
@@ -749,12 +864,14 @@ function exportSelectedPatient() {
       Glucosa: patient.glucose,
       SaturacionO2: patient.oxygenSaturation,
       FrecuenciaRespiratoria: patient.respiratoryRate,
+      PackYears: patient.packHistory,
       Hemoglobina: patient.hemoglobin,
       Creatinina: patient.creatinine,
       BMI: patient.bmi,
       COPD_GOLD: patient.copdGold,
       Tabaquismo: patient.smokingStatus,
       FallaCardiaca: patient.heartFailureHistory,
+      Altitud_msnm: patient.locationElevationM,
       Consulta: patient.appointmentTime,
       Monitoreo: patient.monitoringTime,
       Laboratorio: patient.labTime,
@@ -790,12 +907,14 @@ function exportAllPatients() {
     Glucosa: patient.glucose,
     SaturacionO2: patient.oxygenSaturation,
     FrecuenciaRespiratoria: patient.respiratoryRate,
+    PackYears: patient.packHistory,
     Hemoglobina: patient.hemoglobin,
     Creatinina: patient.creatinine,
     BMI: patient.bmi,
     COPD_GOLD: patient.copdGold,
     Tabaquismo: patient.smokingStatus,
     FallaCardiaca: patient.heartFailureHistory,
+    Altitud_msnm: patient.locationElevationM,
     Consulta: patient.appointmentTime,
     Monitoreo: patient.monitoringTime,
     Laboratorio: patient.labTime,
@@ -882,6 +1001,7 @@ function buildAlerts(patient) {
 
   const alerts = [];
   const oxygen = normalizeOxygenValue(patient.oxygenSaturation);
+  const assessment = computeClinicalAssessment(patient);
 
   if (patient.status === "Critico") {
     alerts.push({ tone: "critical", text: "Estado critico. Priorizar valoracion inmediata." });
@@ -903,6 +1023,15 @@ function buildAlerts(patient) {
       tone: "warning",
       text: `Presion alta: ${patient.bloodPressureSystolic}/${patient.bloodPressureDiastolic}.`,
     });
+  }
+  if (assessment?.outcomeRisks?.respiratory >= 70) {
+    alerts.push({ tone: "critical", text: `Riesgo respiratorio alto: ${assessment.outcomeRisks.respiratory}%.` });
+  }
+  if (assessment?.outcomeRisks?.cardiac >= 70) {
+    alerts.push({ tone: "warning", text: `Riesgo cardiaco relevante: ${assessment.outcomeRisks.cardiac}%.` });
+  }
+  if (assessment?.outcomeRisks?.dangerousSymptom >= 70) {
+    alerts.push({ tone: "warning", text: `Riesgo de nuevo sintoma peligroso: ${assessment.outcomeRisks.dangerousSymptom}%.` });
   }
   if (!alerts.length) {
     alerts.push({ tone: "success", text: "Paciente estable. No hay alertas mayores activas." });
@@ -1029,7 +1158,7 @@ function renderLocation(patient) {
     return;
   }
 
-  const region = regionProfiles[normalizeRegionName(patient.locationCity)];
+  const region = getRegionProfile(patient.locationCity);
   locationWidget.innerHTML = `
     <div class="location-block">
       <div class="location-marker"></div>
@@ -1093,7 +1222,7 @@ function renderPatients() {
         setStatus("Paciente eliminado correctamente.", "success");
       } catch (error) {
         button.disabled = false;
-        setStatus(error.message, "error");
+        setStatus(formatAppError(error, "eliminacion del paciente"), "error");
       }
     });
   });
@@ -1114,6 +1243,7 @@ function getPopulationSummary() {
     `Origen principal: ${training.baseLocation}`,
     `Edad promedio referencia: ${training.meanAge.toFixed(0)} anos`,
     `Saturacion base: ${training.meanOxygen.toFixed(0)}%`,
+    `Altitud media de referencia: ${Math.round(Number(training.meanAltitude || DEFAULT_ALTITUDE_METERS))} m`,
   ];
 }
 
@@ -1151,7 +1281,7 @@ function buildAiDebugData(patient) {
     .slice(0, 5);
   const riskMathValidation = manifest.riskMathValidation || null;
   const assessment = patient ? computeClinicalAssessment(patient) : null;
-  const region = patient ? regionProfiles[normalizeRegionName(patient.locationCity)] : null;
+  const region = patient ? getRegionProfile(patient.locationCity) : null;
   const precision = getTechnicalPrecision(assessment);
   const modelPrecision = Number(activeModel.combinedPrecision || training.selectedModelPrecision || 0);
   const coverageFields = [
@@ -1163,7 +1293,9 @@ function buildAiDebugData(patient) {
     { label: "Glucosa", value: patient?.glucose },
     { label: "Creatinina", value: patient?.creatinine },
     { label: "COPD GOLD", value: patient?.copdGold },
+    { label: "Pack-years", value: patient?.packHistory },
     { label: "Ciudad clinica", value: patient?.locationCity },
+    { label: "Altitud", value: patient?.locationElevationM },
     { label: "Antecedente cardiaco", value: patient?.heartFailureHistory },
     { label: "Estado clinico", value: patient?.status },
     { label: "Tabaquismo", value: patient?.smokingStatus },
@@ -1254,15 +1386,20 @@ function buildAiDebugData(patient) {
     meanAge: Number(training.meanAge || 0),
     meanOxygen: Number(training.meanOxygen || 0),
     meanRespRate: Number(training.meanRespRate || 0),
+    meanAltitude: Number(training.meanAltitude || DEFAULT_ALTITUDE_METERS),
     heartFailureRate: Math.round(Number(training.heartFailureRate || 0) * 100),
     smokingExposureRate: Math.round(Number(training.smokingExposureRate || 0) * 100),
     goldHighRate: Math.round(Number(training.goldHighRate || 0) * 100),
+    respiratoryFailureRate: Math.round(Number(training.respiratoryFailureRate || 0) * 100),
+    cardiacFailureRate: Math.round(Number(training.cardiacFailureRate || 0) * 100),
+    dangerousSymptomRate: Math.round(Number(training.dangerousSymptomRate || 0) * 100),
     patientSignalLines,
     activeVariables: [
       `Edad actual: ${patient?.age || "sin dato"}`,
       `Saturacion O2: ${patient?.oxygenSaturation || "sin dato"}%`,
       `Frecuencia respiratoria: ${patient?.respiratoryRate || "sin dato"} rpm`,
       `Pulso: ${patient?.pulse || "sin dato"} bpm`,
+      `Pack-years: ${patient?.packHistory || "sin dato"}`,
       `Glucosa: ${patient?.glucose || "sin dato"} mg/dL`,
       `Creatinina: ${patient?.creatinine || "sin dato"} mg/dL`,
       `COPD GOLD: ${patient?.copdGold || "sin dato"}`,
@@ -1275,10 +1412,11 @@ function buildAiDebugData(patient) {
     mathLines: assessment
       ? [
           `O2 esperada = max(88, ${training.meanOxygen.toFixed(1)} - ajusteRegional ${region?.oxygenAdjustment || 0}) = ${Math.round(assessment.expectedOxygen)}%`,
-          `Riesgo 72h = base + estado + oxigenacion + FR + pulso + glucosa + creatinina + COPD + tabaquismo + falla cardiaca`,
+          `Riesgo 72h = base + estado + oxigenacion + FR + pulso + glucosa + creatinina + COPD + tabaquismo + falla cardiaca + altitud`,
           `Confianza de entrada = variables presentes / variables evaluadas = ${assessment.confidence}%`,
           `Cobertura del paciente = ${foundCoverageCount}/${totalCoverageCount} datos relevantes detectados en la ultima revision`,
           `Precision tecnica estimada = 0.7 * confianza + 0.3 * coberturaDataset = ${precision}%`,
+          `Subriesgos: respiratorio ${assessment.outcomeRisks?.respiratory || 0}% | cardiaco ${assessment.outcomeRisks?.cardiac || 0}% | sintoma peligroso ${assessment.outcomeRisks?.dangerousSymptom || 0}%`,
           `Modelo ganador = ${training.selectedModelName || "sin nombre"} con ${modelPrecision}% sobre minimo ${Number(training.minimumPrecisionTarget || 90)}%`,
         ]
       : [
@@ -1288,9 +1426,10 @@ function buildAiDebugData(patient) {
       ? [
           "1. Leer paciente seleccionado desde Firestore sincronizado.",
           `2. Normalizar ciudad y cargar perfil regional de ${region?.label || training.baseLocation}.`,
-          `3. Comparar saturacion observada (${patient.oxygenSaturation || "sin dato"}%) con saturacion esperada (${Math.round(assessment.expectedOxygen)}%).`,
-          `4. Sumar detonantes clinicos y ambientales para 72h, 1 semana y 1+ mes.`,
-          `5. Generar recomendaciones explicables con ${assessment.triggers.length} detonantes activos.`,
+          `3. Ajustar por altitud ${region?.altitude || DEFAULT_ALTITUDE_METERS} m y carga tabaquica ${patient.packHistory || 0} pack-years.`,
+          `4. Comparar saturacion observada (${patient.oxygenSaturation || "sin dato"}%) con saturacion esperada (${Math.round(assessment.expectedOxygen)}%).`,
+          `5. Calcular subriesgos respiratorio, cardiaco y de sintoma peligroso antes de consolidar ventanas temporales.`,
+          `6. Generar recomendaciones explicables con ${assessment.triggers.length} detonantes activos.`,
         ]
       : [
           "1. Esperando paciente activo.",
@@ -1694,29 +1833,70 @@ function stopAiDebugResize() {
   state.aiDebugResizeSession = null;
 }
 
+function formatAppError(error, context = "operacion") {
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "Error no identificado.");
+
+  if (code.includes("permission-denied") || message.includes("Missing or insufficient permissions")) {
+    return `Firebase rechazo la ${context} por permisos insuficientes. Verifica que el usuario haya iniciado sesion y que las reglas de Firestore desplegadas permitan esa accion.`;
+  }
+
+  if (code.includes("unauthorized-domain")) {
+    return "Firebase Auth rechazo el dominio actual. Agrega este dominio a Authorized domains en Authentication.";
+  }
+
+  if (code.includes("operation-not-allowed")) {
+    return "Firebase Auth no tiene habilitado Email/Password para este proyecto.";
+  }
+
+  if (code.includes("requires-recent-login")) {
+    return "Firebase requiere una autenticacion reciente para completar esta accion.";
+  }
+
+  return message;
+}
+
 
 function computeClinicalAssessment(patient) {
   if (!patient) return null;
 
   const training = state.trainingProfile;
-  const region = regionProfiles[normalizeRegionName(patient.locationCity)];
+  const region = getRegionProfile(patient.locationCity);
   const oxygen = normalizeOxygenValue(patient.oxygenSaturation);
-  const expectedOxygen = Math.max(88, training.meanOxygen - (region?.oxygenAdjustment || 0));
-  let shortScore = 8;
-  let weekScore = 10;
-  let longScore = 12;
+  const expectedOxygen = Math.max(86, training.meanOxygen - (region?.oxygenAdjustment || 0));
+  const elevation = Number(patient.locationElevationM || region.altitude || DEFAULT_ALTITUDE_METERS);
+  const packHistory = Number(patient.packHistory || 0);
+  const smokingIntensity =
+    patient.smokingStatus === "Alta carga" ? 1
+    : patient.smokingStatus === "Activo" ? 0.8
+    : patient.smokingStatus === "Exfumador" ? 0.45
+    : 0.1;
+  let shortScore = 10;
+  let weekScore = 14;
+  let longScore = 18;
+  let chronicLoad = 8;
+  let respiratoryOutcome = 18;
+  let cardiacOutcome = 16;
+  let symptomOutcome = 14;
   const triggers = [];
   const recommendations = [];
+  const keyFindings = [];
 
   if (patient.status === "Critico") {
     shortScore += 28;
     weekScore += 18;
     longScore += 10;
+    respiratoryOutcome += 14;
+    cardiacOutcome += 12;
+    symptomOutcome += 10;
     triggers.push("Estado clinico actual marcado como critico.");
   } else if (patient.status === "Riesgo") {
     shortScore += 18;
     weekScore += 12;
     longScore += 7;
+    respiratoryOutcome += 8;
+    cardiacOutcome += 6;
+    symptomOutcome += 7;
     triggers.push("Paciente ya clasificado en riesgo por el tablero.");
   }
 
@@ -1725,12 +1905,18 @@ function computeClinicalAssessment(patient) {
       shortScore += 34;
       weekScore += 20;
       longScore += 8;
+      respiratoryOutcome += 28;
+      cardiacOutcome += 10;
       triggers.push(`Saturacion ${oxygen}% por debajo del perfil esperado para ${region.label}.`);
+      keyFindings.push(`Desaturacion marcada: ${oxygen}% frente a expectativa ${Math.round(expectedOxygen)}%.`);
     } else if (oxygen < expectedOxygen - 2) {
       shortScore += 18;
       weekScore += 12;
       longScore += 6;
+      respiratoryOutcome += 16;
+      cardiacOutcome += 6;
       triggers.push(`Saturacion ${oxygen}% con margen estrecho respecto a referencia regional.`);
+      keyFindings.push(`Oxigenacion en vigilancia: ${oxygen}% con penalizacion por altitud.`);
     }
   }
 
@@ -1738,11 +1924,16 @@ function computeClinicalAssessment(patient) {
     shortScore += 24;
     weekScore += 15;
     longScore += 6;
+    respiratoryOutcome += 22;
+    symptomOutcome += 10;
     triggers.push(`Frecuencia respiratoria muy alta: ${patient.respiratoryRate} rpm.`);
+    keyFindings.push(`Taquipnea importante: ${patient.respiratoryRate} respiraciones por minuto.`);
   } else if (patient.respiratoryRate >= 24) {
     shortScore += 14;
     weekScore += 10;
     longScore += 5;
+    respiratoryOutcome += 14;
+    symptomOutcome += 7;
     triggers.push(`Frecuencia respiratoria elevada: ${patient.respiratoryRate} rpm.`);
   }
 
@@ -1750,123 +1941,203 @@ function computeClinicalAssessment(patient) {
     shortScore += 16;
     weekScore += 10;
     longScore += 4;
+    chronicLoad += 3;
+    cardiacOutcome += 18;
+    symptomOutcome += 4;
     triggers.push(`Pulso muy elevado: ${patient.pulse} bpm.`);
+    keyFindings.push(`Pulso muy alto: ${patient.pulse} bpm con carga cardiaca adicional.`);
   } else if (patient.pulse >= 100) {
     shortScore += 9;
     weekScore += 6;
     longScore += 3;
+    chronicLoad += 2;
+    cardiacOutcome += 10;
   }
 
   if (patient.bloodPressureSystolic >= 180 || patient.bloodPressureDiastolic >= 110) {
     shortScore += 16;
     weekScore += 10;
     longScore += 4;
+    chronicLoad += 5;
+    cardiacOutcome += 20;
     triggers.push("Presion arterial severamente elevada.");
+    keyFindings.push(`Presion severa: ${patient.bloodPressureSystolic}/${patient.bloodPressureDiastolic}.`);
   } else if (patient.bloodPressureSystolic >= 150 || patient.bloodPressureDiastolic >= 95) {
     shortScore += 9;
     weekScore += 6;
     longScore += 3;
+    chronicLoad += 3;
+    cardiacOutcome += 10;
   }
 
   if (patient.glucose >= 300) {
     shortScore += 14;
     weekScore += 8;
     longScore += 4;
+    chronicLoad += 5;
+    cardiacOutcome += 7;
+    symptomOutcome += 8;
     triggers.push(`Glucosa muy alta: ${patient.glucose} mg/dL.`);
+    keyFindings.push(`Glucosa muy elevada: ${patient.glucose} mg/dL.`);
   } else if (patient.glucose >= 200) {
     shortScore += 9;
     weekScore += 6;
     longScore += 3;
+    chronicLoad += 3;
+    cardiacOutcome += 4;
+    symptomOutcome += 5;
   }
 
   if (patient.creatinine >= 2) {
     shortScore += 13;
     weekScore += 8;
     longScore += 5;
+    chronicLoad += 6;
+    cardiacOutcome += 10;
     triggers.push(`Creatinina elevada: ${patient.creatinine} mg/dL.`);
   } else if (patient.creatinine >= 1.3) {
     shortScore += 7;
     weekScore += 5;
     longScore += 3;
+    chronicLoad += 4;
+    cardiacOutcome += 5;
   }
 
   if (patient.hemoglobin && patient.hemoglobin < 8) {
     shortScore += 14;
     weekScore += 7;
     longScore += 4;
+    chronicLoad += 4;
+    symptomOutcome += 12;
+    cardiacOutcome += 5;
     triggers.push(`Hemoglobina baja: ${patient.hemoglobin} g/dL.`);
   } else if (patient.hemoglobin && patient.hemoglobin < 10) {
     shortScore += 8;
     weekScore += 5;
     longScore += 3;
+    chronicLoad += 2;
+    symptomOutcome += 6;
   }
 
   if (patient.age >= 80) {
     shortScore += 10;
     weekScore += 8;
     longScore += 6;
+    chronicLoad += 6;
+    cardiacOutcome += 8;
+    respiratoryOutcome += 6;
   } else if (patient.age >= training.meanAge) {
     shortScore += 5;
     weekScore += 4;
     longScore += 4;
+    chronicLoad += 4;
+    cardiacOutcome += 4;
   }
 
   if (patient.copdGold >= 4) {
     shortScore += 16;
     weekScore += 12;
     longScore += 10;
+    chronicLoad += 10;
+    respiratoryOutcome += 24;
+    symptomOutcome += 10;
     triggers.push(`COPD GOLD ${patient.copdGold}: reserva pulmonar reducida.`);
+    keyFindings.push(`EPOC avanzado: GOLD ${patient.copdGold}.`);
   } else if (patient.copdGold >= 3) {
     shortScore += 11;
     weekScore += 9;
     longScore += 8;
+    chronicLoad += 8;
+    respiratoryOutcome += 16;
+    symptomOutcome += 6;
   } else if (patient.copdGold === 2) {
     shortScore += 6;
     weekScore += 5;
     longScore += 5;
+    chronicLoad += 5;
+    respiratoryOutcome += 8;
   }
 
   if (patient.heartFailureHistory === "Si") {
     shortScore += 14;
     weekScore += 10;
     longScore += 8;
+    chronicLoad += 9;
+    cardiacOutcome += 24;
+    respiratoryOutcome += 6;
     triggers.push("Antecedente de falla cardiaca.");
+    keyFindings.push("Antecedente de falla cardiaca con impacto sobre el riesgo cardiopulmonar.");
   }
 
   if (patient.smokingStatus === "Alta carga") {
     shortScore += 8;
     weekScore += 8;
     longScore += 10;
+    chronicLoad += 8;
+    respiratoryOutcome += 12;
+    symptomOutcome += 6;
   } else if (patient.smokingStatus === "Activo") {
     shortScore += 6;
     weekScore += 6;
     longScore += 8;
+    chronicLoad += 6;
+    respiratoryOutcome += 9;
+    symptomOutcome += 4;
   } else if (patient.smokingStatus === "Exfumador") {
     shortScore += 3;
     weekScore += 4;
     longScore += 5;
+    chronicLoad += 4;
+    respiratoryOutcome += 5;
+  }
+
+  if (packHistory >= 80) {
+    shortScore += 10;
+    weekScore += 12;
+    longScore += 16;
+    chronicLoad += 10;
+    respiratoryOutcome += 18;
+    cardiacOutcome += 6;
+    symptomOutcome += 4;
+    triggers.push(`Carga tabaquica extrema: ${packHistory} pack-years.`);
+    keyFindings.push(`Carga tabaquica extrema: ${packHistory} pack-years.`);
+  } else if (packHistory >= 40) {
+    shortScore += 6;
+    weekScore += 8;
+    longScore += 10;
+    chronicLoad += 6;
+    respiratoryOutcome += 10;
+    cardiacOutcome += 4;
+    triggers.push(`Carga tabaquica relevante: ${packHistory} pack-years.`);
   }
 
   if (patient.bmi && patient.bmi < 18.5) {
     shortScore += 6;
     weekScore += 5;
     longScore += 5;
+    chronicLoad += 4;
     triggers.push("IMC bajo, posible fragilidad nutricional.");
   } else if (patient.bmi && patient.bmi > 35) {
     shortScore += 4;
     weekScore += 4;
     longScore += 4;
+    chronicLoad += 4;
   }
 
   if (region.airQualityIndex >= 85) {
     shortScore += 12;
     weekScore += 10;
     longScore += 7;
+    chronicLoad += 5;
+    respiratoryOutcome += 10;
+    symptomOutcome += 4;
     triggers.push(`Calidad del aire exigente en ${region.label}: AQI ${region.airQualityIndex}.`);
   } else if (region.airQualityIndex >= 65) {
     shortScore += 7;
     weekScore += 6;
     longScore += 4;
+    chronicLoad += 3;
+    respiratoryOutcome += 6;
     triggers.push(`Calidad del aire intermedia en ${region.label}: AQI ${region.airQualityIndex}.`);
   }
 
@@ -1874,11 +2145,13 @@ function computeClinicalAssessment(patient) {
     shortScore += 5;
     weekScore += 4;
     longScore += 2;
+    chronicLoad += 2;
     triggers.push(`Temperatura ambiental alta: ${region.temperatureC}C.`);
   } else if (region.temperatureC <= 12) {
     shortScore += 6;
     weekScore += 5;
     longScore += 3;
+    chronicLoad += 2;
     triggers.push(`Temperatura ambiental baja: ${region.temperatureC}C.`);
   }
 
@@ -1886,6 +2159,28 @@ function computeClinicalAssessment(patient) {
     shortScore += 3;
     weekScore += 3;
     longScore += 2;
+    chronicLoad += 1;
+    symptomOutcome += 2;
+  }
+
+  if (elevation >= 2400) {
+    const altitudeRespPenalty = Math.round(8 + (12 * smokingIntensity));
+    shortScore += altitudeRespPenalty;
+    weekScore += altitudeRespPenalty;
+    longScore += altitudeRespPenalty + 3;
+    chronicLoad += 5;
+    respiratoryOutcome += altitudeRespPenalty + 6;
+    cardiacOutcome += 4;
+    triggers.push(`Altitud alta: ${elevation} m sobre el nivel del mar, con mayor exigencia ventilatoria.`);
+    keyFindings.push(`Altitud alta ${elevation} m: eleva el riesgo respiratorio en fumadores y exfumadores.`);
+  } else if (elevation >= 1400) {
+    const altitudeRespPenalty = Math.round(4 + (8 * smokingIntensity));
+    shortScore += altitudeRespPenalty;
+    weekScore += altitudeRespPenalty;
+    longScore += altitudeRespPenalty + 2;
+    chronicLoad += 3;
+    respiratoryOutcome += altitudeRespPenalty + 3;
+    triggers.push(`Altitud intermedia: ${elevation} m con ajuste por reserva respiratoria.`);
   }
 
   shortScore *= region.respiratoryStress || 1;
@@ -1894,10 +2189,23 @@ function computeClinicalAssessment(patient) {
   shortScore *= region.accessPressure;
   weekScore *= region.accessPressure;
   longScore *= region.accessPressure;
+  chronicLoad *= (region.respiratoryStress || 1) * region.accessPressure;
+  respiratoryOutcome *= (region.respiratoryStress || 1) * region.accessPressure;
+  cardiacOutcome *= region.accessPressure;
+  symptomOutcome *= (1 + ((region.airQualityIndex || 0) >= 75 ? 0.04 : 0));
 
-  const shortRisk = Math.min(98, Math.round(shortScore));
-  const weekRisk = Math.min(98, Math.round((shortScore * 0.45) + weekScore));
-  const longRisk = Math.min(98, Math.round((weekScore * 0.52) + longScore));
+  const overallAcute = Math.round((shortScore * 0.36) + (respiratoryOutcome * 0.34) + (cardiacOutcome * 0.18) + (symptomOutcome * 0.12));
+  const weekRiskBase = Math.round((shortScore * 0.38) + weekScore + (chronicLoad * 0.25));
+  const longRiskBase = Math.round((weekScore * 0.42) + longScore + chronicLoad);
+  const shortRisk = Math.min(98, overallAcute);
+  const weekRisk = Math.min(98, Math.max(shortRisk, weekRiskBase, Math.round((respiratoryOutcome * 0.45) + (cardiacOutcome * 0.32) + (symptomOutcome * 0.28))));
+  const longRisk = Math.min(98, Math.max(weekRisk, longRiskBase, Math.round((respiratoryOutcome * 0.32) + (cardiacOutcome * 0.46) + (symptomOutcome * 0.36) + chronicLoad)));
+  const outcomeRisks = {
+    respiratory: Math.min(98, Math.round(respiratoryOutcome)),
+    cardiac: Math.min(98, Math.round(cardiacOutcome)),
+    dangerousSymptom: Math.min(98, Math.round(symptomOutcome)),
+  };
+  const dominantRiskType = Object.entries(outcomeRisks).sort((a, b) => b[1] - a[1])[0]?.[0] || "respiratory";
 
   if (shortRisk >= 70) recommendations.push("Agendar control medico prioritario en menos de 24 horas.");
   else if (shortRisk >= 45) recommendations.push("Programar seguimiento clinico dentro de 48 a 72 horas.");
@@ -1906,9 +2214,20 @@ function computeClinicalAssessment(patient) {
   if (oxygen && oxygen < expectedOxygen - 2) recommendations.push("Verificar signos respiratorios y considerar soporte de oxigeno segun criterio medico.");
   if (patient.glucose >= 200) recommendations.push("Revisar plan metabolico y confirmar adherencia terapeutica.");
   if (patient.heartFailureHistory === "Si") recommendations.push("Correlacionar con balance hidrico y sintomas cardiovasculares.");
+  if (packHistory >= 40) recommendations.push(`Considerar intervencion intensiva sobre tabaquismo: ${packHistory} pack-years registrados.`);
+  if (patient.respiratoryRate >= 28) recommendations.push("La frecuencia respiratoria amerita reevaluacion temprana y vigilancia estrecha por posible deterioro ventilatorio.");
+  if (elevation >= 1400 && patient.smokingStatus !== "Nunca") recommendations.push(`La altitud de ${region.label} (${elevation} m) debe endurecer la lectura de saturacion y disnea.`);
   if (patient.locationCity) recommendations.push(`Ajustar interpretacion al contexto de ${region.label}: ${region.careFocus}.`);
   recommendations.push(`Contexto ambiental: ${region.climate}, ${region.temperatureC}C, AQI ${region.airQualityIndex}, humedad ${region.humidity}%.`);
   recommendations.push(region.recommendationFocus);
+
+  if (dominantRiskType === "respiratory") {
+    recommendations.unshift("El frente dominante es respiratorio: priorizar oxigenacion, trabajo ventilatorio y tolerancia al esfuerzo.");
+  } else if (dominantRiskType === "cardiac") {
+    recommendations.unshift("El frente dominante es cardiaco: vigilar perfusion, tension arterial, pulso y congestión.");
+  } else {
+    recommendations.unshift("El frente dominante es la aparicion de sintomas peligrosos: vigilar cambio clinico, secreciones y disnea subjetiva.");
+  }
 
   const confidenceInputs = [
     patient.oxygenSaturation,
@@ -1918,6 +2237,7 @@ function computeClinicalAssessment(patient) {
     patient.creatinine,
     patient.copdGold,
     patient.locationCity,
+    patient.packHistory,
   ];
   const confidence = Math.round((confidenceInputs.filter(Boolean).length / confidenceInputs.length) * 100);
 
@@ -1926,16 +2246,23 @@ function computeClinicalAssessment(patient) {
     shortRisk,
     weekRisk,
     longRisk,
+    outcomeRisks,
+    dominantRiskType,
     confidence,
     expectedOxygen,
-    environmentalSummary: `${region.label}: ${region.climate}, ${region.temperatureC}C, AQI ${region.airQualityIndex}, humedad ${region.humidity}%`,
+    environmentalSummary: `${region.label}: ${region.climate}, ${region.temperatureC}C, AQI ${region.airQualityIndex}, humedad ${region.humidity}%, altitud ${elevation} m`,
     summary:
-      shortRisk >= 70
-        ? "Alta probabilidad de descompensacion temprana. Conviene actuar hoy."
-        : shortRisk >= 45
-          ? "Riesgo intermedio. Se recomienda vigilancia estrecha y ajustes preventivos."
-          : "Riesgo contenido por ahora. Mantener seguimiento y confirmar tendencia.",
-    triggers: triggers.length ? triggers : ["Sin detonantes criticos mayores en los datos actuales."],
+      dominantRiskType === "respiratory"
+        ? `Predomina el riesgo respiratorio (${outcomeRisks.respiratory}%). La altitud, la oxigenacion y la carga tabaquica estan pesando en el caso.`
+        : dominantRiskType === "cardiac"
+          ? `Predomina el riesgo cardiaco (${outcomeRisks.cardiac}%). La hemodinamia y los antecedentes cardiovasculares requieren vigilancia estrecha.`
+          : `Predomina el riesgo de nuevo sintoma peligroso (${outcomeRisks.dangerousSymptom}%). Conviene vigilancia clinica cercana y reevaluacion.`,
+    triggers: [
+      `Subriesgos -> respiratorio ${outcomeRisks.respiratory}% | cardiaco ${outcomeRisks.cardiac}% | sintoma peligroso ${outcomeRisks.dangerousSymptom}%.`,
+      ...triggers,
+      ...keyFindings,
+    ].slice(0, 8),
+    keyFindings: keyFindings.length ? keyFindings : ["Sin hallazgos diferenciales mayores en los datos actuales."],
     recommendations,
   };
 }
@@ -2964,7 +3291,7 @@ async function loadClinicalTrainingProfile() {
     state.trainingManifest = null;
     aiTrainingBadge.textContent = "Usando perfil base";
     doctorPanelTraining.textContent = "Motor IA: perfil base cargado";
-    setStatus(`No se completo la calibracion local: ${error.message}`, "error");
+    setStatus(`No se completo la calibracion local: ${formatAppError(error, "carga del manifiesto IA")}`, "error");
   }
 }
 
@@ -2991,7 +3318,7 @@ async function createPatientAlert() {
     });
     setStatus("Se agrego una alerta automatizada en las notas del paciente.", "success");
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus(formatAppError(error, "creacion de la alerta IA"), "error");
   }
 }
 
@@ -3240,7 +3567,7 @@ saveLayoutButton.addEventListener("click", async () => {
     setLayoutEditMode(false);
     setStatus("Layout guardado correctamente para este medico.", "success");
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus(formatAppError(error, "guardado del layout"), "error");
   }
 });
 
@@ -3283,6 +3610,7 @@ async function savePatient(event) {
         hemoglobin: formData.get("hemoglobin"),
         creatinine: formData.get("creatinine"),
         bmi: formData.get("bmi"),
+        packHistory: formData.get("packHistory"),
         copdGold: formData.get("copdGold"),
         smokingStatus: formData.get("smokingStatus"),
         heartFailureHistory: formData.get("heartFailureHistory"),
@@ -3301,7 +3629,7 @@ async function savePatient(event) {
     patientForm.reset();
     setStatus("Paciente guardado en Firebase con sus datos clinicos.", "success");
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus(formatAppError(error, "guardado del paciente"), "error");
   } finally {
     savePatientButton.disabled = false;
     savePatientButton.textContent = "Guardar paciente";
@@ -3325,7 +3653,7 @@ async function savePatientNotes() {
     });
     setStatus("Notas del paciente actualizadas.", "success");
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus(formatAppError(error, "guardado de notas"), "error");
   } finally {
     saveNotesButton.disabled = false;
     saveNotesButton.textContent = "Guardar nota del paciente";
@@ -3363,7 +3691,7 @@ if (doctorPhotoInput) {
       renderDoctor(auth.currentUser);
       setStatus("Foto del medico actualizada correctamente.", "success");
     } catch (error) {
-      setStatus(error.message, "error");
+      setStatus(formatAppError(error, "actualizacion del perfil"), "error");
     } finally {
       doctorPhotoInput.value = "";
     }
@@ -3378,7 +3706,7 @@ if (themeToggleButton) {
     try {
       await saveUserLayout();
     } catch (error) {
-      setStatus(error.message, "error");
+      setStatus(formatAppError(error, "guardado del tema"), "error");
     }
   });
 }
@@ -3388,7 +3716,7 @@ if (logoutButton) {
     try {
       await signOut(auth);
     } catch (error) {
-      setStatus(error.message, "error");
+      setStatus(formatAppError(error, "cierre de sesion"), "error");
     }
   });
 }
@@ -3656,7 +3984,7 @@ async function bootDashboard() {
         setStatus("Dashboard sincronizado con Firestore y listo para interactuar.", "success");
       },
       (error) => {
-        setStatus(error.message, "error");
+        setStatus(formatAppError(error, "sincronizacion de pacientes"), "error");
       }
     );
   });

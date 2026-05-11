@@ -1,164 +1,250 @@
 {
-  "generatedAt": "2026-05-03T18:14:57.795952+00:00",
+  "generatedAt": "2026-05-10T23:55:56.709843+00:00",
   "minimumPrecisionTarget": 90.0,
   "selectedMetric": "combined_precision_weighted",
   "activeModel": {
     "name": "RandomForest Balanced",
     "adjusted": false,
-    "combinedPrecision": 97.92,
-    "combinedAccuracy": 97.92,
-    "combinedAucRoc": 99.85,
+    "combinedPrecision": 92.02,
+    "combinedAccuracy": 91.48,
+    "combinedAucRoc": 98.81,
     "triage": {
-      "accuracy": 95.83,
-      "precision_weighted": 95.83,
-      "recall_weighted": 95.83,
-      "f1_weighted": 95.83,
-      "auc_roc": 99.7,
-      "sensitivity": 95.59,
-      "specificity": 52.59
+      "accuracy": 94.32,
+      "precision_weighted": 94.4,
+      "recall_weighted": 94.32,
+      "f1_weighted": 94.17,
+      "auc_roc": 99.24,
+      "sensitivity": 92.21,
+      "specificity": 66.41
     },
     "hospitalization": {
-      "accuracy": 100.0,
-      "precision_weighted": 100.0,
-      "recall_weighted": 100.0,
-      "f1_weighted": 100.0,
-      "auc_roc": 100.0,
-      "sensitivity": 100.0,
-      "specificity": 100.0
+      "accuracy": 88.64,
+      "precision_weighted": 89.64,
+      "recall_weighted": 88.64,
+      "f1_weighted": 88.3,
+      "auc_roc": 98.38,
+      "sensitivity": 98.11,
+      "specificity": 74.29
     },
     "artifacts": {
       "triageModel": "triage-model.joblib",
-      "hospitalizationModel": "hospitalization-model.joblib"
+      "hospitalizationModel": "hospitalization-model.joblib",
+      "respiratoryFailureModel": "respiratory-failure-model.joblib",
+      "cardiacFailureModel": "cardiac-failure-model.joblib",
+      "dangerousSymptomModel": "dangerous-symptom-model.joblib"
     }
   },
   "candidateModels": [
     {
       "name": "RandomForest Balanced",
       "adjusted": false,
-      "combinedPrecision": 97.92,
-      "combinedAccuracy": 97.92,
-      "combinedAucRoc": 99.85,
+      "combinedPrecision": 92.02,
+      "combinedAccuracy": 91.48,
+      "combinedAucRoc": 98.81,
       "triage": {
-        "accuracy": 95.83,
-        "precision_weighted": 95.83,
-        "recall_weighted": 95.83,
-        "f1_weighted": 95.83,
-        "auc_roc": 99.7,
-        "sensitivity": 95.59,
-        "specificity": 52.59
+        "accuracy": 94.32,
+        "precision_weighted": 94.4,
+        "recall_weighted": 94.32,
+        "f1_weighted": 94.17,
+        "auc_roc": 99.24,
+        "sensitivity": 92.21,
+        "specificity": 66.41
       },
       "hospitalization": {
-        "accuracy": 100.0,
-        "precision_weighted": 100.0,
-        "recall_weighted": 100.0,
-        "f1_weighted": 100.0,
-        "auc_roc": 100.0,
-        "sensitivity": 100.0,
-        "specificity": 100.0
+        "accuracy": 88.64,
+        "precision_weighted": 89.64,
+        "recall_weighted": 88.64,
+        "f1_weighted": 88.3,
+        "auc_roc": 98.38,
+        "sensitivity": 98.11,
+        "specificity": 74.29
       }
     },
     {
       "name": "ExtraTrees Clinical",
       "adjusted": false,
-      "combinedPrecision": 95.34,
-      "combinedAccuracy": 94.79,
-      "combinedAucRoc": 99.0,
+      "combinedPrecision": 86.98,
+      "combinedAccuracy": 86.93,
+      "combinedAucRoc": 96.23,
       "triage": {
-        "accuracy": 91.67,
-        "precision_weighted": 92.64,
-        "recall_weighted": 91.67,
-        "f1_weighted": 91.91,
-        "auc_roc": 98.19,
-        "sensitivity": 89.75,
-        "specificity": 56.3
+        "accuracy": 86.36,
+        "precision_weighted": 85.84,
+        "recall_weighted": 86.36,
+        "f1_weighted": 85.68,
+        "auc_roc": 95.75,
+        "sensitivity": 81.85,
+        "specificity": 66.07
       },
       "hospitalization": {
-        "accuracy": 97.92,
-        "precision_weighted": 98.03,
-        "recall_weighted": 97.92,
-        "f1_weighted": 97.93,
-        "auc_roc": 99.81,
-        "sensitivity": 100.0,
-        "specificity": 96.77
+        "accuracy": 87.5,
+        "precision_weighted": 88.12,
+        "recall_weighted": 87.5,
+        "f1_weighted": 87.19,
+        "auc_roc": 96.71,
+        "sensitivity": 96.23,
+        "specificity": 74.29
       }
     },
     {
       "name": "LogisticRegression Clinical",
       "adjusted": false,
-      "combinedPrecision": 95.33,
-      "combinedAccuracy": 94.79,
-      "combinedAucRoc": 98.83,
+      "combinedPrecision": 88.68,
+      "combinedAccuracy": 88.64,
+      "combinedAucRoc": 96.2,
       "triage": {
-        "accuracy": 93.75,
-        "precision_weighted": 94.39,
-        "recall_weighted": 93.75,
-        "f1_weighted": 93.9,
-        "auc_roc": 97.85,
-        "sensitivity": 94.52,
-        "specificity": 52.59
+        "accuracy": 85.23,
+        "precision_weighted": 85.23,
+        "recall_weighted": 85.23,
+        "f1_weighted": 85.23,
+        "auc_roc": 94.29,
+        "sensitivity": 82.53,
+        "specificity": 61.62
       },
       "hospitalization": {
-        "accuracy": 95.83,
-        "precision_weighted": 96.27,
-        "recall_weighted": 95.83,
-        "f1_weighted": 95.88,
-        "auc_roc": 99.81,
-        "sensitivity": 100.0,
-        "specificity": 93.55
+        "accuracy": 92.05,
+        "precision_weighted": 92.14,
+        "recall_weighted": 92.05,
+        "f1_weighted": 91.98,
+        "auc_roc": 98.11,
+        "sensitivity": 96.23,
+        "specificity": 85.71
       }
     }
   ],
+  "specializedModels": {
+    "respiratoryFailure": {
+      "label": "Fallo respiratorio",
+      "artifact": "respiratory-failure-model.joblib",
+      "positiveRate": 47.5,
+      "metrics": {
+        "accuracy": 92.05,
+        "precision_weighted": 92.06,
+        "recall_weighted": 92.05,
+        "f1_weighted": 92.04,
+        "auc_roc": 98.6,
+        "sensitivity": 90.48,
+        "specificity": 93.48
+      }
+    },
+    "cardiacFailure": {
+      "label": "Fallo cardiaco",
+      "artifact": "cardiac-failure-model.joblib",
+      "positiveRate": 47.73,
+      "metrics": {
+        "accuracy": 88.64,
+        "precision_weighted": 88.91,
+        "recall_weighted": 88.64,
+        "f1_weighted": 88.59,
+        "auc_roc": 96.58,
+        "sensitivity": 83.33,
+        "specificity": 93.48
+      }
+    },
+    "dangerousSymptom": {
+      "label": "Nuevo sintoma peligroso",
+      "artifact": "dangerous-symptom-model.joblib",
+      "positiveRate": 47.05,
+      "metrics": {
+        "accuracy": 89.77,
+        "precision_weighted": 90.9,
+        "recall_weighted": 89.77,
+        "f1_weighted": 89.76,
+        "auc_roc": 95.33,
+        "sensitivity": 97.56,
+        "specificity": 82.98
+      }
+    }
+  },
   "riskMathValidation": {
     "validated": true,
-    "summary": "La matematica heuristica se contrasto contra riesgo de hospitalizacion y relaciones esperadas con oxigenacion y frecuencia respiratoria.",
+    "summary": "La matematica heuristica se contrasto contra riesgo de hospitalizacion y relaciones esperadas con oxigenacion, frecuencia respiratoria y exigencia por altitud.",
     "hospitalization_alignment": {
-      "auc_roc": 1.0,
-      "sensitivity": 0.3411764705882353,
+      "auc_roc": 0.9924271886613085,
+      "sensitivity": 0.5676691729323309,
       "specificity": 1.0
     },
     "monotonic_checks": {
-      "oxygen_vs_risk_spearman": -0.7097626571881056,
-      "respiratory_rate_vs_risk_spearman": 0.7253586091991178
+      "oxygen_vs_risk_spearman": -0.7170324231059253,
+      "respiratory_rate_vs_risk_spearman": 0.6857711042392157
     },
     "recommendation_checks": {
       "recommendation_coverage": 1.0,
-      "trigger_coverage": 0.7666666666666667
+      "trigger_coverage": 0.925
     },
     "rule_checks": [
       "Menor saturacion debe empujar el riesgo hacia arriba.",
       "Mayor frecuencia respiratoria debe empujar el riesgo hacia arriba.",
+      "Altitud alta debe endurecer la interpretacion en fumadores y exfumadores.",
       "Cada caso debe producir al menos una recomendacion base."
     ]
   },
   "trainingProfile": {
     "ready": true,
-    "datasetPatients": 240,
+    "datasetPatients": 440,
     "baseLocation": "Barcelona",
     "locationCounts": {
-      "Barcelona": 240
+      "Barcelona": 240,
+      "Medellin": 55,
+      "Pasto": 51,
+      "Cali": 47,
+      "Bogota": 47
     },
-    "meanAge": 63.325,
-    "meanOxygen": 94.29130434782608,
-    "meanRespRate": 17.291666666666668,
-    "meanPackHistory": 20.825,
-    "heartFailureRate": 0.30833333333333335,
-    "smokingExposureRate": 0.3958333333333333,
-    "goldHighRate": 0.3541666666666667,
+    "locationElevations": {
+      "Pasto": 2527,
+      "Cali": 1018,
+      "Medellin": 1495,
+      "Bogota": 2640,
+      "Barcelona": 12
+    },
+    "meanAge": 68.65454545454546,
+    "meanOxygen": 90.17045454545455,
+    "meanRespRate": 20.00227272727273,
+    "meanPackHistory": 20.54090909090909,
+    "highPackHistoryRate": 0.2,
+    "meanAltitude": 877.0636363636364,
+    "heartFailureRate": 0.3795454545454545,
+    "smokingExposureRate": 0.36818181818181817,
+    "goldHighRate": 0.42272727272727273,
+    "respiratoryFailureRate": 0.475,
+    "cardiacFailureRate": 0.4772727272727273,
+    "dangerousSymptomRate": 0.47045454545454546,
     "sourceFiles": [
       "230PatientsCOPD.xlsx",
-      "conteo_locations.csv"
+      "COPD_Patients_Database.xlsx",
+      "Locations_Elevation.csv"
     ],
-    "calibrationMode": "Entrenamiento supervisado offline con seleccion automatica",
+    "calibrationMode": "Entrenamiento supervisado offline con seleccion automatica y ajuste por altitud",
     "sampleRows": [
-      "Edad 47 | O2 97% | FR 13 | GOLD 1 | Tabaquismo Activo | Falla cardiaca No",
-      "Edad 60 | O2 95% | FR 18 | GOLD 3 | Tabaquismo Nunca | Falla cardiaca No",
-      "Edad 55 | O2 89% | FR 24 | GOLD 4 | Tabaquismo Nunca | Falla cardiaca Si"
+      "Edad 47 | Ciudad Barcelona | Altitud 12 m | O2 97% | FR 13 | GOLD 1 | Pack-years 0 | Tabaquismo Activo | Falla cardiaca No",
+      "Edad 60 | Ciudad Barcelona | Altitud 12 m | O2 95% | FR 18 | GOLD 3 | Pack-years 15 | Tabaquismo Nunca | Falla cardiaca No",
+      "Edad 55 | Ciudad Barcelona | Altitud 12 m | O2 89% | FR 24 | GOLD 4 | Pack-years 60 | Tabaquismo Nunca | Falla cardiaca Si",
+      "Edad 78 | Ciudad Barcelona | Altitud 12 m | O2 98% | FR 15 | GOLD 2 | Pack-years 37 | Tabaquismo Exfumador | Falla cardiaca No"
     ],
     "selectedModelName": "RandomForest Balanced",
-    "selectedModelPrecision": 97.92,
-    "triagePrecision": 95.83,
-    "hospitalizationPrecision": 100.0,
+    "selectedModelPrecision": 92.02,
+    "triagePrecision": 94.4,
+    "hospitalizationPrecision": 89.64,
     "minimumPrecisionTarget": 90.0,
-    "retrainedWithAdjustments": false
+    "retrainedWithAdjustments": false,
+    "specializedOutcomes": {
+      "respiratoryFailure": {
+        "label": "Fallo respiratorio",
+        "positiveRate": 47.5,
+        "precision": 92.06,
+        "aucRoc": 98.6
+      },
+      "cardiacFailure": {
+        "label": "Fallo cardiaco",
+        "positiveRate": 47.73,
+        "precision": 88.91,
+        "aucRoc": 96.58
+      },
+      "dangerousSymptom": {
+        "label": "Nuevo sintoma peligroso",
+        "positiveRate": 47.05,
+        "precision": 90.9,
+        "aucRoc": 95.33
+      }
+    }
   }
 }

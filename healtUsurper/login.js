@@ -16,6 +16,25 @@ const loginButton = document.getElementById("btnLogin");
 const registerButton = document.getElementById("btnRegister");
 const themeToggleButton = document.getElementById("themeToggleButton");
 
+function formatAuthError(error, context = "autenticacion") {
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "Error no identificado.");
+
+  if (code.includes("unauthorized-domain")) {
+    return "Firebase Auth rechazo el dominio actual. Agrega este host a Authorized domains antes de iniciar sesion.";
+  }
+
+  if (code.includes("operation-not-allowed")) {
+    return "El proveedor Email/Password no esta habilitado en Firebase Authentication.";
+  }
+
+  if (code.includes("permission-denied") || message.includes("Missing or insufficient permissions")) {
+    return `Firebase rechazo la ${context} por permisos insuficientes. Revisa reglas desplegadas y sesion activa.`;
+  }
+
+  return message;
+}
+
 function setStatus(message, type = "info") {
   authStatus.textContent = message;
   authStatus.dataset.state = type;
@@ -48,7 +67,7 @@ async function loginUser(event) {
     setStatus("Autenticacion correcta. Redirigiendo al dashboard...", "success");
     window.location.href = "./FirstView/dashboard.html";
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus(formatAuthError(error, "inicio de sesion"), "error");
   } finally {
     loginButton.disabled = false;
     loginButton.textContent = "Iniciar sesion";
@@ -65,7 +84,7 @@ async function registerUser() {
     setStatus("Usuario creado correctamente. Puedes completar tu foto desde el dashboard.", "success");
     window.location.href = "./FirstView/dashboard.html";
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus(formatAuthError(error, "registro"), "error");
   } finally {
     registerButton.disabled = false;
     registerButton.textContent = "Crear usuario";
