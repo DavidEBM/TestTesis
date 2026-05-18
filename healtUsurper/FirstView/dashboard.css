@@ -798,10 +798,86 @@ body.dark-mode .workspace-panel{
 .widget-content,
 .stack-list,
 .patients-list,
-.medic-ai-widget{
+.medic-ai-widget,
+.consultation-analysis-widget{
   display:grid;
   gap:12px;
   min-width:0;
+}
+
+.consultation-analysis{
+  display:grid;
+  gap:12px;
+}
+
+.consultation-hero{
+  padding:16px;
+  border-radius:20px;
+  border:1px solid var(--line);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--yellow) 28%, transparent), transparent 36%),
+    linear-gradient(145deg, color-mix(in srgb, var(--pink) 24%, white), color-mix(in srgb, var(--blue) 20%, white));
+}
+
+.consultation-hero p,
+.consultation-card p{
+  margin:0;
+  color:var(--text-soft);
+  line-height:1.55;
+}
+
+.consultation-metrics{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:10px;
+}
+
+.consultation-chip{
+  padding:12px;
+  border-radius:16px;
+  border:1px solid var(--line);
+  background:var(--bg-soft);
+  display:grid;
+  gap:4px;
+}
+
+.consultation-chip span{
+  color:var(--text-soft);
+  font-size:12px;
+}
+
+.consultation-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:10px;
+}
+
+.consultation-card{
+  padding:14px;
+  border-radius:18px;
+  border:1px solid var(--line);
+  background:var(--bg-card);
+  display:grid;
+  gap:8px;
+}
+
+.consultation-list{
+  list-style:none;
+  display:grid;
+  gap:8px;
+}
+
+.consultation-list li{
+  padding:10px 12px;
+  border-radius:14px;
+  background:var(--bg-soft);
+  color:var(--text-soft);
+}
+
+.consultation-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
 }
 
 .soft-badge,
@@ -1485,6 +1561,12 @@ body.dark-mode .ai-summary p{
   gap:12px;
 }
 
+.ai-method-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+  gap:10px;
+}
+
 .ai-detail-card{
   padding:14px;
   border-radius:18px;
@@ -1494,10 +1576,52 @@ body.dark-mode .ai-summary p{
   gap:8px;
 }
 
+.ai-forecast-card{
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--yellow) 28%, transparent), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 94%, transparent), color-mix(in srgb, var(--bg-soft) 96%, transparent));
+}
+
+.ai-method-card{
+  padding:12px;
+  border-radius:16px;
+  border:1px solid var(--line);
+  background:linear-gradient(180deg, color-mix(in srgb, var(--bg-soft) 94%, transparent), color-mix(in srgb, var(--bg-card) 96%, transparent));
+  display:grid;
+  gap:8px;
+}
+
+.ai-method-card[data-tone="active"]{
+  border-color:color-mix(in srgb, #8fbf9f 58%, var(--line));
+}
+
+.ai-method-card[data-tone="proxy"]{
+  border-color:color-mix(in srgb, #d6b567 56%, var(--line));
+}
+
+.ai-method-card[data-tone="planned"]{
+  border-color:color-mix(in srgb, #caa7d9 52%, var(--line));
+}
+
+.ai-method-head{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.ai-method-card p{
+  margin:0;
+  color:var(--text-soft);
+  line-height:1.5;
+}
+
 .ai-detail-list{
   list-style:none;
   display:grid;
   gap:8px;
+  justify-items:start;
 }
 
 .ai-detail-list li{
@@ -1505,6 +1629,8 @@ body.dark-mode .ai-summary p{
   border-radius:14px;
   background:var(--bg-soft);
   color:var(--text-soft);
+  width:fit-content;
+  max-width:100%;
 }
 
 .ai-inline{
@@ -1766,7 +1892,9 @@ body.dark-mode .ai-debug-header{
 
   .risk-grid,
   .ai-details-grid,
-  .ai-debug-grid{
+  .ai-debug-grid,
+  .consultation-metrics,
+  .consultation-grid{
     grid-template-columns:1fr;
   }
 }

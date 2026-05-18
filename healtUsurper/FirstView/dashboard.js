@@ -25,6 +25,7 @@ const DEFAULT_ALTITUDE_METERS = 12;
 const defaultWidgetOrder = [
   "overview",
   "medic-ai",
+  "consult-analysis",
   "alerts",
   "agenda",
   "status",
@@ -46,6 +47,11 @@ const widgetCatalog = {
     label: "IA medica",
     description: "Analisis de riesgo y recomendaciones asistidas.",
     shortcutDescription: "Ir al widget de IA medica.",
+  },
+  "consult-analysis": {
+    label: "Analisis de consulta",
+    description: "Resumen corto del caso y de la IA para lectura rapida.",
+    shortcutDescription: "Ir al widget de analisis de consulta.",
   },
   alerts: {
     label: "Alertas clinicas",
@@ -254,6 +260,10 @@ const state = {
   aiDebugDrag: null,
   aiDebugSize: { width: 560, height: 640 },
   aiDebugResizeSession: null,
+  doctorProfile: {
+    displayName: "",
+    photoUrl: "",
+  },
 };
 
 const leftPanel = document.getElementById("leftPanel");
@@ -300,6 +310,7 @@ const cancelLayoutButton = document.getElementById("cancelLayoutButton");
 const saveLayoutButton = document.getElementById("saveLayoutButton");
 const patientOverview = document.getElementById("patientOverview");
 const medicAiWidget = document.getElementById("medicAiWidget");
+const consultationAnalysisWidget = document.getElementById("consultationAnalysisWidget");
 const aiTrainingBadge = document.getElementById("aiTrainingBadge");
 const aiDebugToggleButton = document.getElementById("aiDebugToggleButton");
 const aiDebugWindow = document.getElementById("aiDebugWindow");
@@ -417,6 +428,13 @@ function createAvatarDataUri(label, colorA = "#f2c8d7", colorB = "#c4d7f2") {
   `;
 
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.replace(/\n\s+/g, "").trim())}`;
+}
+
+function getDoctorIdentity(user) {
+  const fallbackName = user?.email?.split("@")[0] || "Medico Foxcat";
+  const displayName = state.doctorProfile.displayName || user?.displayName || fallbackName;
+  const photoUrl = state.doctorProfile.photoUrl || user?.photoURL || "";
+  return { displayName, photoUrl };
 }
 
 function normalizeRegionName(value) {
@@ -725,6 +743,10 @@ async function loadUserLayout(userId) {
       ? normalizeQuickAccessItems(layoutData.quickAccessItems)
       : [...defaultQuickAccess];
     const theme = layoutData?.theme || localStorage.getItem("foxcat-theme") || "light";
+    state.doctorProfile = {
+      displayName: String(layoutData?.doctorProfile?.displayName || "").trim(),
+      photoUrl: String(layoutData?.doctorProfile?.photoUrl || "").trim(),
+    };
 
     if (Array.isArray(widgetOrder) && widgetOrder.length) {
       state.layoutOrder = [...widgetOrder];
@@ -759,6 +781,7 @@ async function loadUserLayout(userId) {
   state.persistedWidgetSizes = {};
   state.hiddenWidgetKeys = [];
   state.quickAccessItems = normalizeQuickAccessItems(defaultQuickAccess);
+  state.doctorProfile = { displayName: "", photoUrl: "" };
   applyWidgetOrder(defaultWidgetOrder);
   applyWidgetVisibility();
   applyTheme(localStorage.getItem("foxcat-theme") || "light");
@@ -775,7 +798,7 @@ async function saveUserLayout() {
     quickAccessItems: state.quickAccessItems,
     theme: state.theme,
     updatedAt: serverTimestamp(),
-  });
+  }, { merge: true });
 }
 
 function sanitizePatientPayload(raw) {
@@ -1241,10 +1264,221 @@ function getPopulationSummary() {
     `Modelo entrenado: ${training.selectedModelName || "Perfil base"}`,
     `Base local: ${training.datasetPatients} casos de referencia`,
     `Origen principal: ${training.baseLocation}`,
-    `Edad promedio referencia: ${training.meanAge.toFixed(0)} anos`,
-    `Saturacion base: ${training.meanOxygen.toFixed(0)}%`,
+    `Edad promedio de referencia: ${training.meanAge.toFixed(0)} años`,
+    `Saturación base: ${training.meanOxygen.toFixed(0)}%`,
     `Altitud media de referencia: ${Math.round(Number(training.meanAltitude || DEFAULT_ALTITUDE_METERS))} m`,
   ];
+}
+
+function getRiskFrontLabel(type) {
+  if (type === "respiratory") return "respiratorio";
+  if (type === "cardiac") return "cardiopulmonar";
+  if (type === "dangerousSymptom") return "de síntomas de alarma";
+  return "clínico";
+}
+
+function buildConsultationTimeline(assessment) {
+  if (!assessment) {
+    return {
+      lowRiskHours: 0,
+      dangerHours: 0,
+      projectedRisk: 0,
+      summary: "No hay una proyección temporal disponible todavía.",
+    };
+  }
+
+  if (assessment.shortRisk >= 70) {
+    return {
+      lowRiskHours: 0,
+      dangerHours: 24,
+      projectedRisk: assessment.shortRisk,
+      summary: `Ya existe un riesgo alto dentro de las primeras 24 a 72 horas: puede alcanzar ${assessment.shortRisk}%. Si no se corrige, hacia 1 semana podría mantenerse o subir hasta ${assessment.weekRisk}%.`,
+    };
+  }
+
+  if (assessment.shortRisk >= 45) {
+    return {
+      lowRiskHours: 0,
+      dangerHours: 48,
+      projectedRisk: assessment.weekRisk,
+      summary: `No hay una ventana amplia de riesgo bajo. Dentro de 24 a 72 horas el riesgo puede llegar a ${assessment.shortRisk}% y, si no mejora, hacia 1 semana podría subir hasta ${assessment.weekRisk}%.`,
+    };
+  }
+
+  if (assessment.weekRisk >= 55) {
+    return {
+      lowRiskHours: 24,
+      dangerHours: 72,
+      projectedRisk: assessment.weekRisk,
+      summary: `Durante alrededor de 24 horas no se espera un riesgo elevado si sigue las recomendaciones. Después de 72 horas, el riesgo podría subir hasta ${assessment.weekRisk}%.`,
+    };
+  }
+
+  if (assessment.longRisk >= 55) {
+    return {
+      lowRiskHours: 48,
+      dangerHours: 168,
+      projectedRisk: assessment.longRisk,
+      summary: `Durante aproximadamente 48 horas no se espera un riesgo elevado si sigue las recomendaciones. Si no mantiene el control, durante la primera semana el riesgo podría subir hasta ${assessment.longRisk}%.`,
+    };
+  }
+
+  return {
+    lowRiskHours: 72,
+    dangerHours: 168,
+    projectedRisk: assessment.longRisk,
+    summary: `No se observa un riesgo elevado inmediato. Durante cerca de 72 horas puede mantenerse estable si sigue las recomendaciones; después, conviene reevaluar para evitar que el riesgo aumente hasta ${assessment.longRisk}%.`,
+  };
+}
+
+function getConsultationLowRiskWindow(assessment) {
+  if (!assessment) return "Sin ventana estimable";
+  const timeline = buildConsultationTimeline(assessment);
+  if (!timeline.lowRiskHours) {
+    return "No se identifica una ventana clara de riesgo bajo; el caso requiere seguimiento cercano desde ahora.";
+  }
+  return `Puede mantenerse en vigilancia baja durante cerca de ${timeline.lowRiskHours} horas si cumple las recomendaciones.`;
+}
+
+function buildConsultationAnalysis(patient) {
+  if (!patient) return null;
+
+  const assessment = computeClinicalAssessment(patient);
+  const futureEffects = [];
+  const strengths = [];
+  const weaknesses = [];
+
+  if (patient.oxygenSaturation && patient.oxygenSaturation >= Math.round(assessment.expectedOxygen)) {
+    strengths.push(`Oxigenacion conservada frente a referencia esperada (${patient.oxygenSaturation}% vs ${Math.round(assessment.expectedOxygen)}%).`);
+  }
+  if (patient.status === "Estable") {
+    strengths.push("Estado clinico actual reportado como estable.");
+  }
+  if (patient.glucose && patient.glucose < 180) {
+    strengths.push("Control metabolico sin senal severa inmediata.");
+  }
+  if (patient.pulse && patient.pulse < 100) {
+    strengths.push(`Pulso sin taquicardia marcada (${patient.pulse} bpm).`);
+  }
+  if (patient.respiratoryRate && patient.respiratoryRate < 24) {
+    strengths.push(`Frecuencia respiratoria dentro de margen no critico (${patient.respiratoryRate} rpm).`);
+  }
+
+  if (assessment.outcomeRisks.respiratory >= 60) {
+    weaknesses.push(`Fragilidad respiratoria relevante (${assessment.outcomeRisks.respiratory}%).`);
+    futureEffects.push("Puede progresar a desaturacion sostenida, mayor trabajo ventilatorio y agotamiento respiratorio.");
+  }
+  if (assessment.outcomeRisks.cardiac >= 55) {
+    weaknesses.push(`Carga cardiopulmonar importante (${assessment.outcomeRisks.cardiac}%).`);
+    futureEffects.push("Puede aumentar la probabilidad de inestabilidad hemodinamica o descompensacion cardiaca.");
+  }
+  if (assessment.outcomeRisks.dangerousSymptom >= 55) {
+    weaknesses.push(`Riesgo de cambio clinico sintomatico (${assessment.outcomeRisks.dangerousSymptom}%).`);
+    futureEffects.push("Puede aparecer disnea subjetiva mayor, secreciones problematicas o intolerancia al esfuerzo.");
+  }
+  if (Number(patient.packHistory || 0) >= 40) {
+    weaknesses.push(`Historial tabáquico acumulado alto (${patient.packHistory} paquetes-año).`);
+  }
+  if (patient.heartFailureHistory === "Si") {
+    weaknesses.push("Antecedente de falla cardiaca que eleva el riesgo global.");
+  }
+  if (patient.copdGold >= 3) {
+    weaknesses.push(`EPOC avanzado (${patient.copdGold}).`);
+  }
+
+  const conciseRecommendations = assessment.recommendations.slice(0, 3);
+  const dangerStart =
+    assessment.shortRisk >= 70 ? "el riesgo ya es alto en menos de 24 horas"
+    : assessment.shortRisk >= 45 ? "puede volverse peligroso entre 48 y 72 horas"
+    : assessment.weekRisk >= 55 ? "puede escalar a un nivel preocupante durante la primera semana"
+    : "el mayor riesgo aparecería hacia el seguimiento de una semana o más";
+  const timeline = buildConsultationTimeline(assessment);
+
+  return {
+    assessment,
+    headline: `${patient.name} presenta un frente ${getRiskFrontLabel(assessment.dominantRiskType)} con riesgo ${riskTone(assessment.shortRisk).toLowerCase()} en las próximas 72 horas.`,
+    importantSummary: assessment.summary,
+    strengths: strengths.length ? strengths.slice(0, 3) : ["No hay fortalezas clínicas dominantes claramente marcadas; conviene leer el caso de forma conservadora."],
+    weaknesses: weaknesses.length ? weaknesses.slice(0, 4) : ["No se detectan debilidades mayores fuera de la vigilancia rutinaria actual."],
+    conciseRecommendations,
+    lowRiskWindow: getConsultationLowRiskWindow(assessment),
+    dangerStart,
+    futureEffects: futureEffects.length ? futureEffects.slice(0, 3) : ["Si mantiene adherencia y control, el riesgo futuro inmediato no muestra una progresión dominante."],
+    timeline,
+  };
+}
+
+function renderConsultationAnalysis(patient) {
+  if (!consultationAnalysisWidget) return;
+
+  if (!patient) {
+    consultationAnalysisWidget.innerHTML = `
+      <div class="empty-state">
+        Selecciona un paciente para ver un resumen condensado de la IA, puntos fuertes, débiles y recomendaciones de consulta.
+      </div>
+    `;
+    return;
+  }
+
+  const summary = buildConsultationAnalysis(patient);
+  consultationAnalysisWidget.innerHTML = `
+    <div class="consultation-analysis">
+      <div class="consultation-hero">
+        <strong>${escapeHtml(summary.headline)}</strong>
+        <p>${escapeHtml(summary.importantSummary)}</p>
+      </div>
+
+      <article class="consultation-card consultation-time-card">
+        <strong>Riesgo en el tiempo</strong>
+        <p>${escapeHtml(summary.timeline.summary)}</p>
+      </article>
+
+      <div class="consultation-grid">
+        <article class="consultation-card">
+          <strong>Puntos fuertes</strong>
+          <ul class="consultation-list">
+            ${summary.strengths.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </article>
+        <article class="consultation-card">
+          <strong>Puntos débiles</strong>
+          <ul class="consultation-list">
+            ${summary.weaknesses.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </article>
+      </div>
+
+      <article class="consultation-card">
+        <strong>Recomendaciones cortas para el medico</strong>
+        <ul class="consultation-list">
+          ${summary.conciseRecommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </article>
+
+      <div class="consultation-grid">
+        <article class="consultation-card">
+          <strong>Tiempo con riesgo muy bajo</strong>
+          <p>${escapeHtml(summary.lowRiskWindow)}</p>
+        </article>
+        <article class="consultation-card">
+          <strong>Cuándo empezaría a ser peligroso</strong>
+          <p>Si no cumple recomendaciones, ${escapeHtml(summary.dangerStart)}.</p>
+        </article>
+      </div>
+
+      <article class="consultation-card">
+        <strong>Posibles afectaciones futuras</strong>
+        <ul class="consultation-list">
+          ${summary.futureEffects.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </article>
+
+      <div class="consultation-actions">
+        <button type="button" class="ai-primary" data-consult-action="schedule">Agendar Cita</button>
+        <button type="button" class="ai-secondary" data-consult-action="send-summary">Mandar Resumen al paciente</button>
+      </div>
+    </div>
+  `;
 }
 
 function getTechnicalPrecision(assessment) {
@@ -1253,6 +1487,172 @@ function getTechnicalPrecision(assessment) {
   const datasetFactor = Math.min(1, state.trainingProfile.datasetPatients / 230);
   const coverageFactor = assessment.confidence / 100;
   return Math.round((coverageFactor * 0.7 + datasetFactor * 0.3) * 100);
+}
+
+function getAiMethodStatusLabel(status) {
+  if (status === "active") return "Activa";
+  if (status === "proxy") return "Proxy clinico";
+  if (status === "planned") return "Pendiente";
+  return "Informativa";
+}
+
+function getAiMethodTone(status) {
+  if (status === "active") return "active";
+  if (status === "proxy") return "proxy";
+  if (status === "planned") return "planned";
+  return "info";
+}
+
+function renderAiMethodCards(methods = []) {
+  if (!methods.length) {
+    return `<div class="empty-state">No hay metodos IA disponibles para este caso.</div>`;
+  }
+
+  return methods
+    .map((method) => `
+      <article class="ai-method-card" data-tone="${escapeHtml(getAiMethodTone(method.status))}">
+        <div class="ai-method-head">
+          <strong>${escapeHtml(method.name)}</strong>
+          <span class="soft-badge">${escapeHtml(getAiMethodStatusLabel(method.status))}</span>
+        </div>
+        <p>${escapeHtml(method.role)}</p>
+        <p class="ai-detail">${escapeHtml(method.why)}</p>
+        <div class="ai-inline">
+          <span class="soft-pill">${escapeHtml(method.window)}</span>
+          <span class="soft-pill">${escapeHtml(method.signal)}</span>
+          <span class="soft-pill">Confianza ${Number(method.confidence || 0)}%</span>
+        </div>
+      </article>
+    `)
+    .join("");
+}
+
+function buildClinicalForecast(patient, assessment, region) {
+  if (!patient || !assessment) {
+    return {
+      horizon: "Sin paciente activo",
+      deterioration: "No hay pronostico disponible hasta seleccionar un paciente.",
+      watchSignal: "Sin senal dominante",
+      ifUntreated: "Selecciona un paciente para calcular el deterioro probable.",
+    };
+  }
+
+  let horizon = "Seguimiento ordinario";
+  if (assessment.shortRisk >= 70) horizon = "Menos de 24 horas";
+  else if (assessment.shortRisk >= 45) horizon = "48 a 72 horas";
+  else if (assessment.weekRisk >= 55) horizon = "Dentro de 1 semana";
+  else if (assessment.longRisk >= 55) horizon = "Dentro de 1+ mes";
+
+  const respiratoryDriver = assessment.outcomeRisks?.respiratory || 0;
+  const cardiacDriver = assessment.outcomeRisks?.cardiac || 0;
+  const symptomDriver = assessment.outcomeRisks?.dangerousSymptom || 0;
+
+  let deterioration = "Riesgo de reagudizacion clinica progresiva.";
+  let watchSignal = "Vigilar cambios globales del estado clinico.";
+  let ifUntreated = `Si no se actua en ${horizon.toLowerCase()}, el riesgo compuesto puede subir desde ${assessment.shortRisk}% hacia ${assessment.weekRisk}% y ${assessment.longRisk}%.`;
+
+  if (assessment.dominantRiskType === "respiratory") {
+    deterioration = `El deterioro mas probable es respiratorio, con desaturacion y mayor trabajo ventilatorio en ${horizon.toLowerCase()}.`;
+    watchSignal = `Senal centinela: O2 ${patient.oxygenSaturation || "sin dato"}% frente a expectativa ${Math.round(assessment.expectedOxygen)}% y FR ${patient.respiratoryRate || "sin dato"} rpm.`;
+    ifUntreated = `Sin intervencion, la desaturacion puede consolidarse como descompensacion respiratoria en ${region.label}, especialmente con altitud ${region.altitude} m y subriesgo respiratorio ${respiratoryDriver}%.`;
+  } else if (assessment.dominantRiskType === "cardiac") {
+    deterioration = `El deterioro mas probable es cardiopulmonar/hemodinamico dentro de ${horizon.toLowerCase()}.`;
+    watchSignal = `Senal centinela: pulso ${patient.pulse || "sin dato"} bpm, presion ${patient.bloodPressureSystolic || "sin dato"}/${patient.bloodPressureDiastolic || "sin dato"} y antecedente cardiaco ${patient.heartFailureHistory || "sin dato"}.`;
+    ifUntreated = `Sin actuar, puede aumentar la probabilidad de congestion o inestabilidad hemodinamica, con subriesgo cardiaco ${cardiacDriver}% antes de la siguiente ventana critica.`;
+  } else {
+    deterioration = `El deterioro mas probable es la aparicion de un sintoma peligroso o reagudizacion subjetiva en ${horizon.toLowerCase()}.`;
+    watchSignal = `Senal centinela: disnea, secreciones y cambio funcional con subriesgo sintomatico ${symptomDriver}%.`;
+    ifUntreated = `Sin manejo temprano, el cambio clinico puede hacerse visible antes de la reevaluacion programada, empujando el riesgo a ${assessment.weekRisk}% durante la semana.`;
+  }
+
+  return { horizon, deterioration, watchSignal, ifUntreated };
+}
+
+function buildAiMethodRouting(patient, assessment, region) {
+  if (!patient || !assessment) return [];
+
+  const manifest = state.trainingManifest || {};
+  const activeModel = manifest.activeModel || {};
+  const hasRandomForest = String(activeModel.name || state.trainingProfile.selectedModelName || "").toLowerCase().includes("randomforest");
+  const respiratoryFlag = (assessment.outcomeRisks?.respiratory || 0) >= (assessment.outcomeRisks?.cardiac || 0);
+  const rehabCandidate = (assessment.outcomeRisks?.respiratory || 0) >= 55 || Number(patient.copdGold || 0) >= 3;
+  const longFollowUpNeed = assessment.longRisk >= 55 || Number(patient.packHistory || 0) >= 40 || Number(patient.age || 0) >= 75;
+  const featureCoverage = assessment.confidence || 0;
+
+  const methods = [
+    {
+      id: "chaid",
+      name: "Arbol de Decision CHAID",
+      status: "active",
+      role: "Estratifica peligro temprano y abre la primera rama del caso por estado, O2, FR y GOLD.",
+      why: `Se activa porque el caso necesita una lectura rapida de riesgo a 72 horas con ${assessment.shortRisk}% y ${assessment.triggers.length} detonantes visibles.`,
+      window: `Ventana clave: ${assessment.shortRisk}% en 72h`,
+      signal: respiratoryFlag
+        ? `Nodo dominante: oxigenacion/FR en ${region.label}`
+        : `Nodo dominante: estado hemodinamico y carga global`,
+      confidence: Math.max(assessment.confidence, 78),
+    },
+    {
+      id: "wald-logistic",
+      name: "Regresion Logistica Binaria (Wald)",
+      status: "active",
+      role: "Pesa la fuerza de asociacion de edad, tabaquismo, falla cardiaca y biomarcadores con el desenlace clinico.",
+      why: `Se usa para explicar por que el frente ${assessment.dominantRiskType} domina el caso con edad ${patient.age || "sin dato"}, tabaquismo ${patient.smokingStatus || "sin dato"} y pack-years ${patient.packHistory || "sin dato"}.`,
+      window: `Asociacion hacia 1 semana: ${assessment.weekRisk}%`,
+      signal: `Coeficientes clinicos visibles: tabaquismo, edad, O2, creatinina, glucosa`,
+      confidence: Math.max(featureCoverage - 4, 70),
+    },
+    {
+      id: "random-forest",
+      name: "Random Forest",
+      status: hasRandomForest ? "active" : "proxy",
+      role: "Generaliza el riesgo en cohortes y consolida el modelo ganador exportado por el manifiesto.",
+      why: hasRandomForest
+        ? `El manifiesto actual selecciono ${activeModel.name || "RandomForest"} como mejor modelo con precision ${Number(activeModel.combinedPrecision || state.trainingProfile.selectedModelPrecision || 0)}%.`
+        : `El manifiesto activo no tiene un Random Forest ganador, pero se mantiene como comparador de generalizacion del caso.`,
+      window: `Motor de referencia: ${Number(activeModel.combinedPrecision || state.trainingProfile.selectedModelPrecision || 0)}% precision`,
+      signal: `Hospitalizacion ${Number(activeModel.hospitalization?.precision_weighted || state.trainingProfile.hospitalizationPrecision || 0)}%`,
+      confidence: Math.max(Number(activeModel.combinedPrecision || 0), 72),
+    },
+    {
+      id: "mlp",
+      name: "Red Neuronal MLP",
+      status: longFollowUpNeed ? "proxy" : "planned",
+      role: "Vigila patrones complejos de reingreso y deterioro tardio cuando la carga cronica supera la ventana aguda.",
+      why: longFollowUpNeed
+        ? `El caso entra a seguimiento de reingreso porque el riesgo a largo plazo es ${assessment.longRisk}% con carga cronica relevante.`
+        : "Aun no se prioriza para este caso porque la senal tardia es menor que la aguda.",
+      window: `Reingreso / 1+ mes: ${assessment.longRisk}%`,
+      signal: `Carga cronica, pack-years, edad, GOLD y contexto de seguimiento`,
+      confidence: longFollowUpNeed ? Math.max(assessment.longRisk - 8, 62) : 40,
+    },
+    {
+      id: "genetic",
+      name: "Algoritmos Geneticos",
+      status: featureCoverage >= 70 ? "proxy" : "planned",
+      role: "Prioriza las variables con mas impacto esperado sobre calidad de vida y deterioro acumulado.",
+      why: featureCoverage >= 70
+        ? `Se activa como capa de priorizacion porque hay ${featureCoverage}% de cobertura clinica y el caso combina comorbilidad, tabaquismo y contexto ambiental.`
+        : `No hay suficiente cobertura para una buena priorizacion multivariable; faltan campos clave del paciente.`,
+      window: `Priorizacion de variables: ${featureCoverage}% cobertura`,
+      signal: `Edad, O2, GOLD, tabaquismo, IMC, creatinina, glucosa`,
+      confidence: Math.max(featureCoverage - 6, 45),
+    },
+    {
+      id: "psm",
+      name: "Propensity Score Matching",
+      status: rehabCandidate ? "proxy" : "planned",
+      role: "Controla sesgo observacional al estimar si la rehabilitacion respiratoria podria cambiar el pronostico del caso.",
+      why: rehabCandidate
+        ? `Se sugiere porque el paciente parece candidato a rehabilitacion por EPOC/GOLD y frente respiratorio ${assessment.outcomeRisks?.respiratory || 0}%.`
+        : "Queda en reserva hasta que el caso muestre indicios mas claros de rehabilitacion comparativa.",
+      window: `Impacto potencial sobre seguimiento: ${assessment.weekRisk}% a 1 semana`,
+      signal: `Comparacion observacional para rehabilitacion y adherencia`,
+      confidence: rehabCandidate ? Math.max((assessment.outcomeRisks?.respiratory || 0) - 5, 55) : 35,
+    },
+  ];
+
+  return methods;
 }
 
 function formatDebugTimestamp(value) {
@@ -1282,6 +1682,8 @@ function buildAiDebugData(patient) {
   const riskMathValidation = manifest.riskMathValidation || null;
   const assessment = patient ? computeClinicalAssessment(patient) : null;
   const region = patient ? getRegionProfile(patient.locationCity) : null;
+  const aiMethods = patient && assessment ? buildAiMethodRouting(patient, assessment, region) : [];
+  const clinicalForecast = patient && assessment ? buildClinicalForecast(patient, assessment, region) : null;
   const precision = getTechnicalPrecision(assessment);
   const modelPrecision = Number(activeModel.combinedPrecision || training.selectedModelPrecision || 0);
   const coverageFields = [
@@ -1409,6 +1811,11 @@ function buildAiDebugData(patient) {
       `AQI regional: ${region?.airQualityIndex || "sin dato"}`,
       `Altitud regional: ${region?.altitude || "sin dato"} m`,
     ],
+    aiMethods,
+    activeAiMethods: aiMethods.filter((item) => item.status === "active"),
+    proxyAiMethods: aiMethods.filter((item) => item.status === "proxy"),
+    pendingAiMethods: aiMethods.filter((item) => item.status === "planned"),
+    clinicalForecast,
     mathLines: assessment
       ? [
           `O2 esperada = max(88, ${training.meanOxygen.toFixed(1)} - ajusteRegional ${region?.oxygenAdjustment || 0}) = ${Math.round(assessment.expectedOxygen)}%`,
@@ -1418,6 +1825,7 @@ function buildAiDebugData(patient) {
           `Precision tecnica estimada = 0.7 * confianza + 0.3 * coberturaDataset = ${precision}%`,
           `Subriesgos: respiratorio ${assessment.outcomeRisks?.respiratory || 0}% | cardiaco ${assessment.outcomeRisks?.cardiac || 0}% | sintoma peligroso ${assessment.outcomeRisks?.dangerousSymptom || 0}%`,
           `Modelo ganador = ${training.selectedModelName || "sin nombre"} con ${modelPrecision}% sobre minimo ${Number(training.minimumPrecisionTarget || 90)}%`,
+          `Pronostico sin tratamiento = ${clinicalForecast?.horizon || "sin ventana"} -> ${clinicalForecast?.deterioration || "sin deterioro estimado"}`,
         ]
       : [
           "Selecciona un paciente para ver la matematica aplicada por el motor heuristico.",
@@ -1429,7 +1837,7 @@ function buildAiDebugData(patient) {
           `3. Ajustar por altitud ${region?.altitude || DEFAULT_ALTITUDE_METERS} m y carga tabaquica ${patient.packHistory || 0} pack-years.`,
           `4. Comparar saturacion observada (${patient.oxygenSaturation || "sin dato"}%) con saturacion esperada (${Math.round(assessment.expectedOxygen)}%).`,
           `5. Calcular subriesgos respiratorio, cardiaco y de sintoma peligroso antes de consolidar ventanas temporales.`,
-          `6. Generar recomendaciones explicables con ${assessment.triggers.length} detonantes activos.`,
+          `6. Orquestar metodos IA del caso (${aiMethods.filter((item) => item.status !== "planned").length} activos/proxy) y generar recomendaciones con ${assessment.triggers.length} detonantes activos.`,
         ]
       : [
           "1. Esperando paciente activo.",
@@ -1475,7 +1883,45 @@ function renderAiDebugWindow() {
         `Cobertura de detonantes: ${Math.round(Number(debugData.riskMathValidation.recommendation_checks?.trigger_coverage || 0) * 100)}%`,
       ]
     : ["Sin bloque de validacion heuristica en el manifiesto actual."];
+  const aiMethodItems = debugData.aiMethods.length
+    ? debugData.aiMethods.map((method) => `
+        <li>
+          <strong>${escapeHtml(method.name)}</strong> · ${escapeHtml(getAiMethodStatusLabel(method.status))}<br>
+          ${escapeHtml(method.role)}<br>
+          ${escapeHtml(method.why)}<br>
+          ${escapeHtml(method.window)} · ${escapeHtml(method.signal)} · Confianza ${Number(method.confidence || 0)}%
+        </li>
+      `).join("")
+    : `<li>Sin metodos IA mapeados para este caso.</li>`;
   aiDebugBody.innerHTML = `
+    <section class="ai-debug-section">
+      <strong>Orquestacion IA del paciente</strong>
+      <div class="ai-debug-grid">
+        <div class="ai-debug-metric">
+          <span>Metodos activos</span>
+          <strong>${debugData.activeAiMethods.length}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Capas proxy</span>
+          <strong>${debugData.proxyAiMethods.length}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Pendientes de artefacto</span>
+          <strong>${debugData.pendingAiMethods.length}</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Pronostico sin tratamiento</span>
+          <strong>${escapeHtml(debugData.clinicalForecast?.horizon || "sin ventana")}</strong>
+        </div>
+      </div>
+      <p class="ai-debug-note">${escapeHtml(debugData.clinicalForecast?.deterioration || "Sin pronostico de deterioro.")}</p>
+      <p class="ai-debug-note">${escapeHtml(debugData.clinicalForecast?.watchSignal || "Sin senal centinela.")}</p>
+      <p class="ai-debug-note">${escapeHtml(debugData.clinicalForecast?.ifUntreated || "Sin escenario de progresion.")}</p>
+      <ul class="ai-debug-list">
+        ${aiMethodItems}
+      </ul>
+    </section>
+
     <section class="ai-debug-section">
       <strong>Motor activo</strong>
       <div class="ai-debug-grid">
@@ -2240,6 +2686,26 @@ function computeClinicalAssessment(patient) {
     patient.packHistory,
   ];
   const confidence = Math.round((confidenceInputs.filter(Boolean).length / confidenceInputs.length) * 100);
+  const forecast = buildClinicalForecast(patient, {
+    shortRisk,
+    weekRisk,
+    longRisk,
+    outcomeRisks,
+    dominantRiskType,
+    expectedOxygen,
+    confidence,
+    triggers,
+  }, region);
+  const aiMethods = buildAiMethodRouting(patient, {
+    shortRisk,
+    weekRisk,
+    longRisk,
+    outcomeRisks,
+    dominantRiskType,
+    expectedOxygen,
+    confidence,
+    triggers,
+  }, region);
 
   return {
     region,
@@ -2264,6 +2730,8 @@ function computeClinicalAssessment(patient) {
     ].slice(0, 8),
     keyFindings: keyFindings.length ? keyFindings : ["Sin hallazgos diferenciales mayores en los datos actuales."],
     recommendations,
+    forecast,
+    aiMethods,
   };
 }
 
@@ -2296,6 +2764,18 @@ function renderMedicAi(patient) {
         </p>
       </div>
 
+      <div class="ai-detail-card ai-forecast-card">
+        <strong>Pronostico anticipado si no se trata</strong>
+        <p class="ai-detail">${escapeHtml(assessment.forecast.deterioration)}</p>
+        <div class="ai-inline">
+          <span class="soft-pill">Ventana critica: ${escapeHtml(assessment.forecast.horizon)}</span>
+          <span class="soft-pill">Confianza ${assessment.confidence}%</span>
+          <span class="soft-pill">Frente dominante: ${escapeHtml(assessment.dominantRiskType)}</span>
+        </div>
+        <p class="ai-detail">${escapeHtml(assessment.forecast.watchSignal)}</p>
+        <p class="ai-disclaimer">${escapeHtml(assessment.forecast.ifUntreated)}</p>
+      </div>
+
       <div class="risk-grid">
         <div class="risk-card">
           <span>24 a 72 horas</span>
@@ -2311,6 +2791,13 @@ function renderMedicAi(patient) {
           <span>1+ mes</span>
           <strong>${assessment.longRisk}% · ${riskTone(assessment.longRisk)}</strong>
           <div class="risk-meter"><span style="width:${assessment.longRisk}%"></span></div>
+        </div>
+      </div>
+
+      <div class="ai-detail-card">
+        <strong>Metodos IA aplicados al caso</strong>
+        <div class="ai-method-grid">
+          ${renderAiMethodCards(assessment.aiMethods)}
         </div>
       </div>
 
@@ -2360,8 +2847,9 @@ function renderMedicAi(patient) {
 }
 
 function renderDoctor(user) {
-  const name = user.displayName || "Medico sin nombre";
-  const photo = user.photoURL || createAvatarDataUri(name, "#f9d6dd", "#dce9ff");
+  const { displayName, photoUrl } = getDoctorIdentity(user);
+  const name = displayName || "Medico sin nombre";
+  const photo = photoUrl || createAvatarDataUri(name, "#f9d6dd", "#dce9ff");
 
   doctorPhoto.src = photo;
   doctorMenuPhoto.src = photo;
@@ -3235,6 +3723,7 @@ function renderDashboard() {
   renderQuickAccessList();
   renderPatientOverview(patient);
   renderMedicAi(patient);
+  renderConsultationAnalysis(patient);
   renderPatients();
   renderStackList(alertsWidget, buildAlerts(patient), "alerts");
   renderStackList(agendaWidget, buildAgenda(patient));
@@ -3684,10 +4173,22 @@ if (doctorPhotoInput) {
 
     try {
       const photoDataUrl = await readFileAsDataUrl(file);
-      await updateProfile(auth.currentUser, {
-        displayName: auth.currentUser.displayName || auth.currentUser.email?.split("@")[0] || "Medico Foxcat",
-        photoURL: photoDataUrl,
-      });
+      const displayName = auth.currentUser.displayName || auth.currentUser.email?.split("@")[0] || "Medico Foxcat";
+
+      state.doctorProfile = {
+        displayName,
+        photoUrl: photoDataUrl,
+      };
+
+      await setDoc(doc(db, "userLayouts", auth.currentUser.uid), {
+        doctorProfile: state.doctorProfile,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      if (!auth.currentUser.displayName) {
+        await updateProfile(auth.currentUser, { displayName });
+      }
+
       renderDoctor(auth.currentUser);
       setStatus("Foto del medico actualizada correctamente.", "success");
     } catch (error) {
@@ -3709,6 +4210,46 @@ if (themeToggleButton) {
       setStatus(formatAppError(error, "guardado del tema"), "error");
     }
   });
+}
+
+function buildPatientFacingSummary(patient) {
+  const summary = buildConsultationAnalysis(patient);
+  if (!summary) return "";
+
+  return [
+    `Paciente: ${patient.name}.`,
+    `Resumen: ${summary.importantSummary}`,
+    `Riesgo en el tiempo: ${summary.timeline.summary}`,
+    `Recomendaciones principales: ${summary.conciseRecommendations.join(" ")}`,
+    `Seguimiento: ${summary.lowRiskWindow}`,
+    `Atención: si no sigues las recomendaciones, ${summary.dangerStart}.`,
+  ].join(" ");
+}
+
+function sendPatientSummary() {
+  const patient = getSelectedPatient();
+  if (!patient) {
+    setStatus("Selecciona un paciente antes de preparar el resumen para compartir.", "error");
+    return;
+  }
+
+  const summaryText = buildPatientFacingSummary(patient);
+  renderWorkspace(
+    "Resumen para paciente",
+    `
+      <div class="workspace-grid">
+        <article class="workspace-card">
+          <strong>${escapeHtml(patient.name)}</strong>
+          <p>${escapeHtml(summaryText)}</p>
+        </article>
+        <article class="workspace-card">
+          <strong>Uso sugerido</strong>
+          <p>Este resumen esta redactado en formato corto para compartirlo por un canal externo o explicarlo al paciente durante la consulta.</p>
+        </article>
+      </div>
+    `
+  );
+  setStatus("Resumen del paciente preparado para compartir.", "success");
 }
 
 if (logoutButton) {
@@ -3947,6 +4488,23 @@ medicAiWidget.addEventListener("change", (event) => {
   setStatus(`Opcion seleccionada: ${select.options[select.selectedIndex].text}. Usa el boton para abrirla.`, "info");
 });
 
+if (consultationAnalysisWidget) {
+  consultationAnalysisWidget.addEventListener("click", (event) => {
+    const actionButton = event.target.closest("[data-consult-action]");
+    if (!actionButton) return;
+
+    if (actionButton.dataset.consultAction === "schedule") {
+      renderWorkspaceAction("calendar-view");
+      setStatus("Abriendo agenda para programar la cita del paciente.", "success");
+      return;
+    }
+
+    if (actionButton.dataset.consultAction === "send-summary") {
+      sendPatientSummary();
+    }
+  });
+}
+
 async function bootDashboard() {
   syncTopbarOffset();
   applyWidgetOrder(defaultWidgetOrder);
@@ -3967,8 +4525,8 @@ async function bootDashboard() {
       return;
     }
 
-    renderDoctor(user);
     await loadUserLayout(user.uid);
+    renderDoctor(user);
 
     const patientsQuery = query(collection(db, "patients"), orderBy("createdAt", "desc"));
 
