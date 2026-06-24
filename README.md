@@ -189,7 +189,7 @@ Muestra:
 Decision de interfaz:
 
 - se evito mostrar tres porcentajes grandes aislados
-- ahora se usa una frase corta del tipo `Durante x horas... despues de y horas el riesgo podria subir hasta z%`
+- ahora se usa una frase corta del tipo `Durante "x" horas... despues de "y" horas el riesgo podria subir hasta "z"%`
 - esto ayuda a que el medico entienda primero la conclusion operativa
 - esa frase no usa una logica aparte: se deriva de las mismas ventanas del modulo IA (`24 a 72 horas`, `1 semana`, `1+ mes`) para evitar contradicciones
 

@@ -196,8 +196,8 @@ Objetivo:
 
 Ejemplo de salida esperada:
 
-- `Durante aproximadamente x horas no se espera un riesgo elevado...`
-- `Despues de y horas, el riesgo podria subir hasta z%`
+- `Durante aproximadamente "x" horas no se espera un riesgo elevado...`
+- `Despues de "y" horas, el riesgo podria subir hasta "z"%`
 
 Esto reemplaza en ese widget la idea de mostrar tres porcentajes grandes aislados como primera lectura.
 

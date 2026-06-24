@@ -21,6 +21,9 @@ import {
 import { loadTrainingManifest, summarizeActiveModel } from "../ai/model-loader.js";
 
 const DEFAULT_ALTITUDE_METERS = 12;
+const QUESTIONNAIRES_STORAGE_KEY = "foxcat-patient-questionnaires";
+const WIDGET_DRAG_SCROLL_EDGE_PX = 96;
+const WIDGET_DRAG_SCROLL_MAX_STEP = 30;
 
 const defaultWidgetOrder = [
   "overview",
@@ -30,6 +33,7 @@ const defaultWidgetOrder = [
   "agenda",
   "status",
   "form",
+  "questionnaires",
   "patients",
   "labs",
   "critical",
@@ -72,6 +76,11 @@ const widgetCatalog = {
     label: "Registrar paciente",
     description: "Formulario de captura e importacion clinica.",
     shortcutDescription: "Ir al formulario de registro de pacientes.",
+  },
+  questionnaires: {
+    label: "Cuestionarios paciente",
+    description: "Catalogo de formularios por link o QR para mostrar al paciente.",
+    shortcutDescription: "Ir al modulo de cuestionarios del paciente.",
   },
   patients: {
     label: "Pacientes sincronizados",
@@ -228,6 +237,8 @@ const fallbackTrainingProfile = {
   hospitalizationPrecision: 82,
   minimumPrecisionTarget: 90,
   retrainedWithAdjustments: false,
+  datasetSplit: { train: 70, validation: 15, test: 15 },
+  crossValidation: { strategy: "5-fold estratificada", folds: 5, meanPrecision: 82, meanAucRoc: 90 },
 };
 
 const state = {
@@ -264,6 +275,8 @@ const state = {
     displayName: "",
     photoUrl: "",
   },
+  questionnaires: [],
+  selectedQuestionnaireId: "",
 };
 
 const leftPanel = document.getElementById("leftPanel");
@@ -327,8 +340,14 @@ const criticalWidget = document.getElementById("criticalWidget");
 const locationWidget = document.getElementById("locationWidget");
 const patientsList = document.getElementById("patientsList");
 const patientsCounter = document.getElementById("patientsCounter");
-const patientForm = document.getElementById("patientForm");
-const savePatientButton = document.getElementById("savePatientButton");
+const questionnairesWidget = document.getElementById("questionnairesWidget");
+const patientModuleCount = document.getElementById("patientModuleCount");
+const patientModuleAreas = document.getElementById("patientModuleAreas");
+const patientModuleRole = document.getElementById("patientModuleRole");
+const patientCrudModal = document.getElementById("patientCrudModal");
+const patientCrudTitle = document.getElementById("patientCrudTitle");
+const patientCrudBody = document.getElementById("patientCrudBody");
+const closePatientCrudButton = document.getElementById("closePatientCrudButton");
 const importPatientsInput = document.getElementById("importPatientsInput");
 const exportSelectedButton = document.getElementById("exportSelectedButton");
 const exportAllButton = document.getElementById("exportAllButton");
@@ -345,14 +364,18 @@ const widgetPlacementTarget = document.getElementById("widgetPlacementTarget");
 const widgetPlacementShifts = document.createElement("div");
 widgetPlacementShifts.className = "widget-placement-shifts";
 widgetPlacementOverlay.appendChild(widgetPlacementShifts);
+const transparentDragImage = new Image();
+transparentDragImage.src =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 const widgetElements = [...dashboardGrid.querySelectorAll("[data-widget-key]")];
 const resizeObserver = new ResizeObserver((entries) => {
-  if (!state.layoutEditMode) return;
+  if (!state.layoutEditMode || !state.resizeSession?.key) return;
 
   entries.forEach((entry) => {
     const widget = entry.target;
     const key = widget.dataset.widgetKey;
+    if (key !== state.resizeSession.key) return;
     state.draftWidgetSizes[key] = clampWidgetSize(widget, {
       width: Math.round(entry.contentRect.width),
       height: Math.round(entry.contentRect.height),
@@ -370,6 +393,18 @@ function isWidgetVisible(key) {
 
 function getVisibleWidgetKeys() {
   return state.layoutOrder.filter((key) => isWidgetVisible(key) && widgetCatalog[key]);
+}
+
+function getOrderedVisibleWidgetKeys(order = state.layoutOrder, excludeKey = null) {
+  return normalizeWidgetOrder(order)
+    .filter((key) => key !== excludeKey)
+    .filter((key) => isWidgetVisible(key) && widgetCatalog[key]);
+}
+
+function getOrderedVisibleWidgetElements(order = state.layoutOrder, excludeKey = null) {
+  return getOrderedVisibleWidgetKeys(order, excludeKey)
+    .map((key) => getWidgetElementByKey(key))
+    .filter(Boolean);
 }
 
 function getAddableWidgetKeys() {
@@ -554,6 +589,10 @@ function getRiskScore(patient) {
   if (patient.respiratoryRate >= 24) score += 2;
   if (Number(patient.copdGold) >= 3) score += 2;
   if (patient.heartFailureHistory === "Si") score += 2;
+  if (patient.coronaryHistory === "Si") score += 2;
+  if (patient.arrhythmias === "Si") score += 2;
+  if (Number(patient.bnp || 0) >= 400) score += 2;
+  if (String(patient.ecg || "").trim() && !String(patient.ecg).toLowerCase().includes("normal")) score += 1;
   if (Number(patient.packHistory || 0) >= 40) score += 2;
   if (elevation >= 2400 && patient.smokingStatus !== "Nunca") score += 2;
   else if (elevation >= 1400 && ["Activo", "Alta carga"].includes(patient.smokingStatus)) score += 1;
@@ -594,6 +633,10 @@ function normalizePatient(patientDoc) {
     copdGold: Number(data.copdGold || 0),
     smokingStatus: normalizeSmokingStatus(data.smokingStatus),
     heartFailureHistory: normalizeBooleanText(data.heartFailureHistory),
+    ecg: data.ecg || "",
+    bnp: Number(data.bnp || 0),
+    coronaryHistory: normalizeBooleanText(data.coronaryHistory),
+    arrhythmias: normalizeBooleanText(data.arrhythmias),
     locationCity: normalizedCity,
     locationElevationM: derivedElevation,
     locationRiskLevel: derivedRiskLevel,
@@ -618,6 +661,24 @@ function reorderList(list, draggedKey, targetKey) {
   next.splice(draggedIndex, 1);
   next.splice(targetIndex, 0, draggedKey);
   return next;
+}
+
+function normalizeWidgetOrder(order) {
+  const uniqueKnownKeys = [...new Set((order || []).filter((key) => widgetCatalog[key]))];
+  const missingKeys = defaultWidgetOrder.filter((key) => !uniqueKnownKeys.includes(key));
+  return [...uniqueKnownKeys, ...missingKeys];
+}
+
+function moveWidgetBefore(list, draggedKey, insertBeforeKey = null) {
+  const base = normalizeWidgetOrder(list).filter((key) => key !== draggedKey);
+
+  if (!insertBeforeKey || !base.includes(insertBeforeKey)) {
+    return [...base, draggedKey];
+  }
+
+  const insertIndex = base.indexOf(insertBeforeKey);
+  base.splice(insertIndex, 0, draggedKey);
+  return base;
 }
 
 function applyWidgetOrder(order) {
@@ -673,18 +734,42 @@ function scrollElementIntoViewport(element, options = {}) {
 }
 
 function getWidgetMinimums(widget) {
-  if (widget.classList.contains("widget-wide")) return { width: 640, height: 280 };
+  const currentWidth = Math.round(widget?.getBoundingClientRect?.().width || 0);
+  if (widget.classList.contains("widget-wide")) {
+    return currentWidth >= 820 ? { width: 700, height: 220 } : { width: 640, height: 280 };
+  }
   if (widget.classList.contains("widget-form")) return { width: 480, height: 420 };
   if (widget.classList.contains("widget-list")) return { width: 560, height: 320 };
-  if (widget.classList.contains("widget-ai")) return { width: 460, height: 340 };
+  if (widget.classList.contains("widget-ai")) {
+    return currentWidth >= 760 ? { width: 620, height: 260 } : { width: 460, height: 340 };
+  }
+  if (widget.dataset.widgetKey === "consult-analysis") {
+    return currentWidth >= 700 ? { width: 520, height: 260 } : { width: 340, height: 280 };
+  }
   return { width: 340, height: 280 };
 }
 
 function clampWidgetSize(widget, size) {
-  const min = getWidgetMinimums(widget);
+  const requestedWidth = Number(size?.width || widget?.getBoundingClientRect?.().width || 0);
+  const dashboardWidth = Math.max(220, Math.round((dashboardGrid?.clientWidth || window.innerWidth || requestedWidth || 360) - 28));
+  const effectiveWidth = Math.min(dashboardWidth, Math.max(220, requestedWidth || 0));
+  const widthAwareMinimums = (() => {
+    if (widget.classList.contains("widget-wide")) {
+      return effectiveWidth >= 820 ? { width: 700, height: 220 } : { width: 640, height: 280 };
+    }
+    if (widget.classList.contains("widget-form")) return { width: 480, height: 420 };
+    if (widget.classList.contains("widget-list")) return { width: 560, height: 320 };
+    if (widget.classList.contains("widget-ai")) {
+      return effectiveWidth >= 760 ? { width: 620, height: 260 } : { width: 460, height: 340 };
+    }
+    if (widget.dataset.widgetKey === "consult-analysis") {
+      return effectiveWidth >= 700 ? { width: 520, height: 260 } : { width: 340, height: 280 };
+    }
+    return getWidgetMinimums(widget);
+  })();
   return {
-    width: Math.max(min.width, Number(size?.width || min.width)),
-    height: Math.max(min.height, Number(size?.height || min.height)),
+    width: Math.min(dashboardWidth, Math.max(widthAwareMinimums.width, Number(size?.width || widthAwareMinimums.width))),
+    height: Math.max(widthAwareMinimums.height, Number(size?.height || widthAwareMinimums.height)),
   };
 }
 
@@ -701,6 +786,24 @@ function applyWidgetSizes(sizes) {
       widget.style.removeProperty("--widget-width");
       widget.style.removeProperty("--widget-height");
     }
+  });
+  syncResponsiveWidgetShapes();
+}
+
+function getWidgetShape(widget) {
+  if (!widget) return "default";
+  const width = Math.round(widget.getBoundingClientRect().width || 0);
+  const key = widget.dataset.widgetKey;
+
+  if (key === "overview") return width >= 820 ? "wide" : "stacked";
+  if (key === "medic-ai") return width >= 760 ? "wide" : "stacked";
+  if (key === "consult-analysis") return width >= 700 ? "wide" : "stacked";
+  return "default";
+}
+
+function syncResponsiveWidgetShapes() {
+  widgetElements.forEach((widget) => {
+    widget.dataset.shape = getWidgetShape(widget);
   });
 }
 
@@ -720,6 +823,8 @@ function setLayoutEditMode(active) {
   state.layoutEditMode = active;
   if (!active) {
     state.activeResizeWidgetKey = null;
+    state.draggedWidgetKey = null;
+    updatePlacementVisuals(null, "");
   }
   dashboardGrid.classList.toggle("layout-edit-mode", active);
   layoutControls.hidden = !active;
@@ -749,13 +854,14 @@ async function loadUserLayout(userId) {
     };
 
     if (Array.isArray(widgetOrder) && widgetOrder.length) {
-      state.layoutOrder = [...widgetOrder];
-      state.persistedLayoutOrder = [...widgetOrder];
+      const normalizedOrder = normalizeWidgetOrder(widgetOrder);
+      state.layoutOrder = [...normalizedOrder];
+      state.persistedLayoutOrder = [...normalizedOrder];
       state.widgetSizes = { ...widgetSizes };
       state.persistedWidgetSizes = { ...widgetSizes };
       state.hiddenWidgetKeys = [...hiddenWidgetKeys];
       state.quickAccessItems = [...quickAccessItems];
-      applyWidgetOrder(widgetOrder);
+      applyWidgetOrder(normalizedOrder);
       applyWidgetSizes(widgetSizes);
       applyWidgetVisibility();
     } else {
@@ -813,6 +919,10 @@ function sanitizePatientPayload(raw) {
   const heartFailureHistory = normalizeBooleanText(
     getRawField(raw, "heartFailureHistory", "FallaCardiaca", "History of Heart Failure")
   );
+  const coronaryHistory = normalizeBooleanText(
+    getRawField(raw, "coronaryHistory", "AntecedentesCoronarios", "Coronary History")
+  );
+  const arrhythmias = normalizeBooleanText(getRawField(raw, "arrhythmias", "Arritmias", "Arrhythmias"));
   const packHistory = Number(getRawField(raw, "packHistory", "Pack History") || 0);
   const derivedStatus =
     String(getRawField(raw, "status", "Estado") || "").trim() ||
@@ -842,6 +952,10 @@ function sanitizePatientPayload(raw) {
     copdGold,
     smokingStatus: normalizeSmokingStatus(getRawField(raw, "smokingStatus", "status of smoking", "Tabaquismo")),
     heartFailureHistory,
+    ecg: String(getRawField(raw, "ecg", "ECG", "Electrocardiograma") || "").trim(),
+    bnp: Number(getRawField(raw, "bnp", "BNP", "NT-proBNP") || 0),
+    coronaryHistory,
+    arrhythmias,
     locationCity: normalizedCity,
     locationElevationM: Number(getRawField(raw, "locationElevationM", "locationElevationMeters") || 0) || getLocationElevationMeters(normalizedCity),
     locationRiskLevel: Number(getRawField(raw, "locationRiskLevel") || 0) || normalizeLocationRiskLevel(rawLocation),
@@ -894,6 +1008,10 @@ function exportSelectedPatient() {
       COPD_GOLD: patient.copdGold,
       Tabaquismo: patient.smokingStatus,
       FallaCardiaca: patient.heartFailureHistory,
+      ECG: patient.ecg,
+      BNP: patient.bnp,
+      AntecedentesCoronarios: patient.coronaryHistory,
+      Arritmias: patient.arrhythmias,
       Altitud_msnm: patient.locationElevationM,
       Consulta: patient.appointmentTime,
       Monitoreo: patient.monitoringTime,
@@ -937,6 +1055,10 @@ function exportAllPatients() {
     COPD_GOLD: patient.copdGold,
     Tabaquismo: patient.smokingStatus,
     FallaCardiaca: patient.heartFailureHistory,
+    ECG: patient.ecg,
+    BNP: patient.bnp,
+    AntecedentesCoronarios: patient.coronaryHistory,
+    Arritmias: patient.arrhythmias,
     Altitud_msnm: patient.locationElevationM,
     Consulta: patient.appointmentTime,
     Monitoreo: patient.monitoringTime,
@@ -1047,6 +1169,15 @@ function buildAlerts(patient) {
       text: `Presion alta: ${patient.bloodPressureSystolic}/${patient.bloodPressureDiastolic}.`,
     });
   }
+  if (patient.bnp >= 400) {
+    alerts.push({ tone: patient.bnp >= 900 ? "critical" : "warning", text: `BNP elevado: ${patient.bnp} pg/mL.` });
+  }
+  if (patient.arrhythmias === "Si") {
+    alerts.push({ tone: "warning", text: "Arritmias registradas: vigilar ritmo y sintomas asociados." });
+  }
+  if (patient.ecg && !String(patient.ecg).toLowerCase().includes("normal")) {
+    alerts.push({ tone: "warning", text: `ECG con hallazgo: ${patient.ecg}.` });
+  }
   if (assessment?.outcomeRisks?.respiratory >= 70) {
     alerts.push({ tone: "critical", text: `Riesgo respiratorio alto: ${assessment.outcomeRisks.respiratory}%.` });
   }
@@ -1097,7 +1228,8 @@ function buildLabs(patient) {
       { label: "Glucosa", value: "Sin dato" },
       { label: "Saturacion O2", value: "Sin dato" },
       { label: "Creatinina", value: "Sin dato" },
-      { label: "Pulso", value: "Sin dato" },
+      { label: "ECG", value: "Sin dato" },
+      { label: "BNP", value: "Sin dato" },
     ];
   }
 
@@ -1106,6 +1238,11 @@ function buildLabs(patient) {
     { label: "Saturacion O2", value: patient.oxygenSaturation ? `${patient.oxygenSaturation}%` : "No registrada" },
     { label: "Creatinina", value: patient.creatinine ? `${patient.creatinine} mg/dL` : "No registrada" },
     { label: "Pulso", value: patient.pulse ? `${patient.pulse} bpm` : "No registrado" },
+    { label: "Presion sistolica", value: patient.bloodPressureSystolic ? `${patient.bloodPressureSystolic} mmHg` : "No registrada" },
+    { label: "ECG", value: patient.ecg || "No registrado" },
+    { label: "BNP", value: patient.bnp ? `${patient.bnp} pg/mL` : "No registrado" },
+    { label: "Antecedentes coronarios", value: patient.coronaryHistory || "No registrado" },
+    { label: "Arritmias", value: patient.arrhythmias || "No registrado" },
   ];
 }
 
@@ -1234,19 +1371,10 @@ function renderPatients() {
   });
 
   patientsList.querySelectorAll("[data-delete]").forEach((button) => {
-    button.addEventListener("click", async (event) => {
+    button.addEventListener("click", (event) => {
       event.stopPropagation();
-      button.disabled = true;
-      setStatus("Eliminando paciente...", "info");
-
-      try {
-        await deleteDoc(doc(db, "patients", button.dataset.delete));
-        if (state.selectedPatientId === button.dataset.delete) state.selectedPatientId = null;
-        setStatus("Paciente eliminado correctamente.", "success");
-      } catch (error) {
-        button.disabled = false;
-        setStatus(formatAppError(error, "eliminacion del paciente"), "error");
-      }
+      const patient = state.patients.find((item) => item.id === button.dataset.delete);
+      if (patient) openDeleteConfirmation(patient);
     });
   });
 
@@ -1260,8 +1388,12 @@ function renderPatients() {
 
 function getPopulationSummary() {
   const training = state.trainingProfile;
+  const split = training.datasetSplit || state.trainingManifest?.datasetSplit || { train: 70, validation: 15, test: 15 };
+  const crossValidation = training.crossValidation || state.trainingManifest?.crossValidation || null;
   return [
     `Modelo entrenado: ${training.selectedModelName || "Perfil base"}`,
+    `Split: ${split.train}% train / ${split.validation}% validation / ${split.test}% test`,
+    crossValidation ? `Cross validation: ${crossValidation.strategy || "k-fold"} (${crossValidation.folds || 5} folds)` : "Cross validation: pendiente",
     `Base local: ${training.datasetPatients} casos de referencia`,
     `Origen principal: ${training.baseLocation}`,
     `Edad promedio de referencia: ${training.meanAge.toFixed(0)} años`,
@@ -1292,7 +1424,7 @@ function buildConsultationTimeline(assessment) {
       lowRiskHours: 0,
       dangerHours: 24,
       projectedRisk: assessment.shortRisk,
-      summary: `Ya existe un riesgo alto dentro de las primeras 24 a 72 horas: puede alcanzar ${assessment.shortRisk}%. Si no se corrige, hacia 1 semana podría mantenerse o subir hasta ${assessment.weekRisk}%.`,
+      summary: `Ya existe un riesgo alto en la ventana de 24 horas: puede alcanzar ${assessment.shortRisk}%. Si no se corrige, hacia 7 dias podria mantenerse o subir hasta ${assessment.weekRisk}%.`,
     };
   }
 
@@ -1301,7 +1433,7 @@ function buildConsultationTimeline(assessment) {
       lowRiskHours: 0,
       dangerHours: 48,
       projectedRisk: assessment.weekRisk,
-      summary: `No hay una ventana amplia de riesgo bajo. Dentro de 24 a 72 horas el riesgo puede llegar a ${assessment.shortRisk}% y, si no mejora, hacia 1 semana podría subir hasta ${assessment.weekRisk}%.`,
+      summary: `No hay una ventana amplia de riesgo bajo. Dentro de 24 horas el riesgo puede llegar a ${assessment.shortRisk}% y, si no mejora, hacia 7 dias podria subir hasta ${assessment.weekRisk}%.`,
     };
   }
 
@@ -1310,7 +1442,7 @@ function buildConsultationTimeline(assessment) {
       lowRiskHours: 24,
       dangerHours: 72,
       projectedRisk: assessment.weekRisk,
-      summary: `Durante alrededor de 24 horas no se espera un riesgo elevado si sigue las recomendaciones. Después de 72 horas, el riesgo podría subir hasta ${assessment.weekRisk}%.`,
+      summary: `En el momento actual no se espera un riesgo elevado si sigue las recomendaciones. A 24 horas debe reevaluarse y hacia 7 dias podria subir hasta ${assessment.weekRisk}%.`,
     };
   }
 
@@ -1319,7 +1451,7 @@ function buildConsultationTimeline(assessment) {
       lowRiskHours: 48,
       dangerHours: 168,
       projectedRisk: assessment.longRisk,
-      summary: `Durante aproximadamente 48 horas no se espera un riesgo elevado si sigue las recomendaciones. Si no mantiene el control, durante la primera semana el riesgo podría subir hasta ${assessment.longRisk}%.`,
+      summary: `Durante la ventana de 24 horas no se espera un riesgo elevado si sigue las recomendaciones. Si no mantiene el control, hacia 30 dias podria subir hasta ${assessment.longRisk}%.`,
     };
   }
 
@@ -1327,7 +1459,7 @@ function buildConsultationTimeline(assessment) {
     lowRiskHours: 72,
     dangerHours: 168,
     projectedRisk: assessment.longRisk,
-    summary: `No se observa un riesgo elevado inmediato. Durante cerca de 72 horas puede mantenerse estable si sigue las recomendaciones; después, conviene reevaluar para evitar que el riesgo aumente hasta ${assessment.longRisk}%.`,
+    summary: `No se observa un riesgo elevado actual. Puede mantenerse estable en la ventana de 24 horas si sigue las recomendaciones; despues, conviene reevaluar para evitar que el riesgo aumente hasta ${assessment.longRisk}% a 30 dias.`,
   };
 }
 
@@ -1389,14 +1521,14 @@ function buildConsultationAnalysis(patient) {
   const conciseRecommendations = assessment.recommendations.slice(0, 3);
   const dangerStart =
     assessment.shortRisk >= 70 ? "el riesgo ya es alto en menos de 24 horas"
-    : assessment.shortRisk >= 45 ? "puede volverse peligroso entre 48 y 72 horas"
-    : assessment.weekRisk >= 55 ? "puede escalar a un nivel preocupante durante la primera semana"
-    : "el mayor riesgo aparecería hacia el seguimiento de una semana o más";
+    : assessment.shortRisk >= 45 ? "puede volverse peligroso dentro de 24 horas"
+    : assessment.weekRisk >= 55 ? "puede escalar a un nivel preocupante hacia 7 dias"
+    : "el mayor riesgo apareceria hacia el seguimiento de 30 dias";
   const timeline = buildConsultationTimeline(assessment);
 
   return {
     assessment,
-    headline: `${patient.name} presenta un frente ${getRiskFrontLabel(assessment.dominantRiskType)} con riesgo ${riskTone(assessment.shortRisk).toLowerCase()} en las próximas 72 horas.`,
+    headline: `${patient.name} presenta un frente ${getRiskFrontLabel(assessment.dominantRiskType)} con riesgo ${riskTone(assessment.shortRisk).toLowerCase()} en las proximas 24 horas.`,
     importantSummary: assessment.summary,
     strengths: strengths.length ? strengths.slice(0, 3) : ["No hay fortalezas clínicas dominantes claramente marcadas; conviene leer el caso de forma conservadora."],
     weaknesses: weaknesses.length ? weaknesses.slice(0, 4) : ["No se detectan debilidades mayores fuera de la vigilancia rutinaria actual."],
@@ -1539,9 +1671,9 @@ function buildClinicalForecast(patient, assessment, region) {
 
   let horizon = "Seguimiento ordinario";
   if (assessment.shortRisk >= 70) horizon = "Menos de 24 horas";
-  else if (assessment.shortRisk >= 45) horizon = "48 a 72 horas";
-  else if (assessment.weekRisk >= 55) horizon = "Dentro de 1 semana";
-  else if (assessment.longRisk >= 55) horizon = "Dentro de 1+ mes";
+  else if (assessment.shortRisk >= 45) horizon = "Dentro de 24 horas";
+  else if (assessment.weekRisk >= 55) horizon = "Dentro de 7 dias";
+  else if (assessment.longRisk >= 55) horizon = "Dentro de 30 dias";
 
   const respiratoryDriver = assessment.outcomeRisks?.respiratory || 0;
   const cardiacDriver = assessment.outcomeRisks?.cardiac || 0;
@@ -1585,8 +1717,8 @@ function buildAiMethodRouting(patient, assessment, region) {
       name: "Arbol de Decision CHAID",
       status: "active",
       role: "Estratifica peligro temprano y abre la primera rama del caso por estado, O2, FR y GOLD.",
-      why: `Se activa porque el caso necesita una lectura rapida de riesgo a 72 horas con ${assessment.shortRisk}% y ${assessment.triggers.length} detonantes visibles.`,
-      window: `Ventana clave: ${assessment.shortRisk}% en 72h`,
+      why: `Se activa porque el caso necesita una lectura rapida de riesgo a 24 horas con ${assessment.shortRisk}% y ${assessment.triggers.length} detonantes visibles.`,
+      window: `Ventana clave: ${assessment.shortRisk}% en 24h`,
       signal: respiratoryFlag
         ? `Nodo dominante: oxigenacion/FR en ${region.label}`
         : `Nodo dominante: estado hemodinamico y carga global`,
@@ -1598,7 +1730,7 @@ function buildAiMethodRouting(patient, assessment, region) {
       status: "active",
       role: "Pesa la fuerza de asociacion de edad, tabaquismo, falla cardiaca y biomarcadores con el desenlace clinico.",
       why: `Se usa para explicar por que el frente ${assessment.dominantRiskType} domina el caso con edad ${patient.age || "sin dato"}, tabaquismo ${patient.smokingStatus || "sin dato"} y pack-years ${patient.packHistory || "sin dato"}.`,
-      window: `Asociacion hacia 1 semana: ${assessment.weekRisk}%`,
+      window: `Asociacion hacia 7 dias: ${assessment.weekRisk}%`,
       signal: `Coeficientes clinicos visibles: tabaquismo, edad, O2, creatinina, glucosa`,
       confidence: Math.max(featureCoverage - 4, 70),
     },
@@ -1615,6 +1747,36 @@ function buildAiMethodRouting(patient, assessment, region) {
       confidence: Math.max(Number(activeModel.combinedPrecision || 0), 72),
     },
     {
+      id: "xgboost",
+      name: "XGBoost",
+      status: "proxy",
+      role: "Rey tabular para relaciones no lineales entre SpO2, FR, presion, BNP, edad y comorbilidades.",
+      why: `Se propone como candidato predictivo porque el caso tiene senales tabulares mixtas y riesgo 24h de ${assessment.shortRisk}%.`,
+      window: "Benchmark tabular: actual, 24h, 7 dias y 30 dias",
+      signal: "Gradiente boosting con regularizacion para eventos clinicos raros",
+      confidence: Math.max(featureCoverage - 2, 62),
+    },
+    {
+      id: "lightgbm",
+      name: "LightGBM",
+      status: "proxy",
+      role: "Prueba rapida de boosting tabular para cohortes medianas con muchas variables clinicas faltantes.",
+      why: "Se sugiere para comparar velocidad, calibracion y ranking de importancia frente a RandomForest.",
+      window: "Validacion cruzada y calibracion por ventana temporal",
+      signal: "Histogram boosting, importancia por ganancia y estabilidad por fold",
+      confidence: Math.max(featureCoverage - 4, 60),
+    },
+    {
+      id: "catboost",
+      name: "CatBoost",
+      status: "proxy",
+      role: "Modelo tabular fuerte cuando hay variables categoricas clinicas como ciudad, tabaquismo, estado y antecedentes.",
+      why: `Puede aprovechar categorias del paciente sin codificacion fragil: ${patient.locationCity || "sin ciudad"}, ${patient.smokingStatus || "sin tabaquismo"}.`,
+      window: "Comparador para longitudinalidad y validacion clinica",
+      signal: "Boosting categorico con menor fuga por codificacion",
+      confidence: Math.max(featureCoverage - 5, 58),
+    },
+    {
       id: "mlp",
       name: "Red Neuronal MLP",
       status: longFollowUpNeed ? "proxy" : "planned",
@@ -1622,7 +1784,7 @@ function buildAiMethodRouting(patient, assessment, region) {
       why: longFollowUpNeed
         ? `El caso entra a seguimiento de reingreso porque el riesgo a largo plazo es ${assessment.longRisk}% con carga cronica relevante.`
         : "Aun no se prioriza para este caso porque la senal tardia es menor que la aguda.",
-      window: `Reingreso / 1+ mes: ${assessment.longRisk}%`,
+      window: `Reingreso / 30 dias: ${assessment.longRisk}%`,
       signal: `Carga cronica, pack-years, edad, GOLD y contexto de seguimiento`,
       confidence: longFollowUpNeed ? Math.max(assessment.longRisk - 8, 62) : 40,
     },
@@ -1646,7 +1808,7 @@ function buildAiMethodRouting(patient, assessment, region) {
       why: rehabCandidate
         ? `Se sugiere porque el paciente parece candidato a rehabilitacion por EPOC/GOLD y frente respiratorio ${assessment.outcomeRisks?.respiratory || 0}%.`
         : "Queda en reserva hasta que el caso muestre indicios mas claros de rehabilitacion comparativa.",
-      window: `Impacto potencial sobre seguimiento: ${assessment.weekRisk}% a 1 semana`,
+      window: `Impacto potencial sobre seguimiento: ${assessment.weekRisk}% a 7 dias`,
       signal: `Comparacion observacional para rehabilitacion y adherencia`,
       confidence: rehabCandidate ? Math.max((assessment.outcomeRisks?.respiratory || 0) - 5, 55) : 35,
     },
@@ -1699,6 +1861,10 @@ function buildAiDebugData(patient) {
     { label: "Ciudad clinica", value: patient?.locationCity },
     { label: "Altitud", value: patient?.locationElevationM },
     { label: "Antecedente cardiaco", value: patient?.heartFailureHistory },
+    { label: "ECG", value: patient?.ecg },
+    { label: "BNP", value: patient?.bnp },
+    { label: "Antecedentes coronarios", value: patient?.coronaryHistory },
+    { label: "Arritmias", value: patient?.arrhythmias },
     { label: "Estado clinico", value: patient?.status },
     { label: "Tabaquismo", value: patient?.smokingStatus },
     { label: "Hemoglobina", value: patient?.hemoglobin },
@@ -1735,6 +1901,8 @@ function buildAiDebugData(patient) {
     ? Math.max(0, Math.round((Date.now() - new Date(manifest.generatedAt).getTime()) / 60000))
     : null;
   const validationSummary = manifest.riskMathValidation?.summary || "Sin bloque de validacion heuristica en el manifiesto actual.";
+  const datasetSplit = manifest.datasetSplit || training.datasetSplit || { train: 70, validation: 15, test: 15 };
+  const crossValidation = manifest.crossValidation || training.crossValidation || {};
   const patientSignalLines = patient
     ? [
         `Documento: ${patient.documentId || "sin dato"}`,
@@ -1762,6 +1930,8 @@ function buildAiDebugData(patient) {
     generatedAtLabel,
     manifestFreshnessMinutes,
     selectedMetric: manifest.selectedMetric || "combined_precision_weighted",
+    datasetSplit,
+    crossValidation,
     modelAdjusted: Boolean(activeModel.adjusted),
     modelArtifacts: activeModel.artifacts || {},
     modelArtifactsCount: Object.values(activeModel.artifacts || {}).filter(Boolean).length,
@@ -1778,7 +1948,7 @@ function buildAiDebugData(patient) {
     trainingReady: Boolean(training.ready),
     retrainedWithAdjustments: Boolean(training.retrainedWithAdjustments),
     trainingSummary: training.ready
-      ? `Training.py cargo ${training.datasetPatients} registros desde ${training.sourceFiles?.join(" + ") || "dataset local"} para recalcular medias, tasas y distribucion por ciudad. Modelo activo: ${training.selectedModelName || "sin nombre"} con precision combinada ${training.selectedModelPrecision || precision}%.`
+      ? `Training.py cargo ${training.datasetPatients} registros desde ${training.sourceFiles?.join(" + ") || "dataset local"} con split ${datasetSplit.train}% train / ${datasetSplit.validation}% validation / ${datasetSplit.test}% test. Modelo activo: ${training.selectedModelName || "sin nombre"} con precision combinada ${training.selectedModelPrecision || precision}%.`
       : "No hubo entrenamiento en tiempo real. El motor usa un perfil base de respaldo con medias predefinidas.",
     sourceFiles: training.sourceFiles?.join(", ") || "Dataset local",
     sampleRows: training.sampleRows?.length ? training.sampleRows : fallbackTrainingProfile.sampleRows,
@@ -1819,7 +1989,7 @@ function buildAiDebugData(patient) {
     mathLines: assessment
       ? [
           `O2 esperada = max(88, ${training.meanOxygen.toFixed(1)} - ajusteRegional ${region?.oxygenAdjustment || 0}) = ${Math.round(assessment.expectedOxygen)}%`,
-          `Riesgo 72h = base + estado + oxigenacion + FR + pulso + glucosa + creatinina + COPD + tabaquismo + falla cardiaca + altitud`,
+          `Riesgo 24h = base + estado + oxigenacion + FR + pulso + glucosa + creatinina + COPD + tabaquismo + falla cardiaca + altitud`,
           `Confianza de entrada = variables presentes / variables evaluadas = ${assessment.confidence}%`,
           `Cobertura del paciente = ${foundCoverageCount}/${totalCoverageCount} datos relevantes detectados en la ultima revision`,
           `Precision tecnica estimada = 0.7 * confianza + 0.3 * coberturaDataset = ${precision}%`,
@@ -1965,6 +2135,14 @@ function renderAiDebugWindow() {
           <span>Ultimos datos disponibles</span>
           <strong>${debugData.foundCoverageCount}/${debugData.totalCoverageCount} datos encontrados</strong>
         </div>
+        <div class="ai-debug-metric">
+          <span>Split entrenamiento</span>
+          <strong>${debugData.datasetSplit.train}% / ${debugData.datasetSplit.validation}% / ${debugData.datasetSplit.test}%</strong>
+        </div>
+        <div class="ai-debug-metric">
+          <span>Cross validation</span>
+          <strong>${escapeHtml(debugData.crossValidation.strategy || "5-fold estratificada")}</strong>
+        </div>
       </div>
       <p class="ai-debug-note">El modelo mostrado corresponde al mejor entrenamiento exportado por Training.py, con objetivo minimo de ${debugData.modelTarget}%. La precision tecnica estimada sigue siendo una metrica operativa por paciente basada en cobertura de variables, senal del caso y dataset local.</p>
     </section>
@@ -2055,6 +2233,10 @@ function renderAiDebugWindow() {
           <span>Falla cardiaca / tabaquismo / GOLD alto</span>
           <strong>${debugData.heartFailureRate}% / ${debugData.smokingExposureRate}% / ${debugData.goldHighRate}%</strong>
         </div>
+        <div class="ai-debug-metric">
+          <span>Validacion cruzada</span>
+          <strong>${debugData.crossValidation.folds || 5} folds - Prec ${debugData.crossValidation.meanPrecision || debugData.modelPrecision}%</strong>
+        </div>
       </div>
       <div class="ai-debug-log">${escapeHtml(debugData.processLog.join("\n"))}</div>
       <p class="ai-debug-note">Fuentes activas: ${escapeHtml(debugData.sourceFiles)}. Distribucion resumida: ${escapeHtml(debugData.locationSummary)}.</p>
@@ -2106,7 +2288,7 @@ function renderAiDebugWindow() {
       <div class="ai-debug-code">${escapeHtml(debugData.mathLines.join("\n"))}</div>
       ${
         debugData.assessment
-          ? `<p class="ai-debug-note">Ventanas calculadas: 72h ${debugData.assessment.shortRisk}% | 1 semana ${debugData.assessment.weekRisk}% | 1+ mes ${debugData.assessment.longRisk}%.</p>`
+          ? `<p class="ai-debug-note">Ventanas calculadas: actual por subdominio | 24h ${debugData.assessment.shortRisk}% | 7 dias ${debugData.assessment.weekRisk}% | 30 dias ${debugData.assessment.longRisk}%.</p>`
           : `<p class="ai-debug-note">La ventana de riesgos aparecera aqui cuando exista un paciente activo.</p>`
       }
     </section>
@@ -2515,6 +2697,55 @@ function computeClinicalAssessment(patient) {
     keyFindings.push("Antecedente de falla cardiaca con impacto sobre el riesgo cardiopulmonar.");
   }
 
+  if (patient.coronaryHistory === "Si") {
+    shortScore += 10;
+    weekScore += 9;
+    longScore += 7;
+    chronicLoad += 7;
+    cardiacOutcome += 20;
+    triggers.push("Antecedentes coronarios registrados.");
+    keyFindings.push("Antecedente coronario: eleva la interpretacion del riesgo cardiaco.");
+  }
+
+  if (patient.arrhythmias === "Si") {
+    shortScore += 12;
+    weekScore += 8;
+    longScore += 5;
+    chronicLoad += 5;
+    cardiacOutcome += 18;
+    symptomOutcome += 4;
+    triggers.push("Arritmias registradas.");
+    keyFindings.push("Arritmia: vigilar pulso, perfusion y sintomas de alarma.");
+  }
+
+  if (patient.bnp >= 900) {
+    shortScore += 14;
+    weekScore += 10;
+    longScore += 6;
+    chronicLoad += 8;
+    cardiacOutcome += 22;
+    respiratoryOutcome += 4;
+    triggers.push(`BNP muy elevado: ${patient.bnp} pg/mL.`);
+    keyFindings.push(`BNP ${patient.bnp} pg/mL: posible carga de falla cardiaca o congestion.`);
+  } else if (patient.bnp >= 400) {
+    shortScore += 8;
+    weekScore += 6;
+    longScore += 4;
+    chronicLoad += 5;
+    cardiacOutcome += 12;
+    triggers.push(`BNP elevado: ${patient.bnp} pg/mL.`);
+  }
+
+  if (patient.ecg && !String(patient.ecg).toLowerCase().includes("normal")) {
+    shortScore += 8;
+    weekScore += 6;
+    longScore += 3;
+    cardiacOutcome += 12;
+    symptomOutcome += 3;
+    triggers.push(`ECG con hallazgo: ${patient.ecg}.`);
+    keyFindings.push(`ECG: ${patient.ecg}.`);
+  }
+
   if (patient.smokingStatus === "Alta carga") {
     shortScore += 8;
     weekScore += 8;
@@ -2654,12 +2885,15 @@ function computeClinicalAssessment(patient) {
   const dominantRiskType = Object.entries(outcomeRisks).sort((a, b) => b[1] - a[1])[0]?.[0] || "respiratory";
 
   if (shortRisk >= 70) recommendations.push("Agendar control medico prioritario en menos de 24 horas.");
-  else if (shortRisk >= 45) recommendations.push("Programar seguimiento clinico dentro de 48 a 72 horas.");
+  else if (shortRisk >= 45) recommendations.push("Programar seguimiento clinico dentro de 24 horas.");
   else recommendations.push("Mantener seguimiento ordinario con reevaluacion segun agenda.");
 
   if (oxygen && oxygen < expectedOxygen - 2) recommendations.push("Verificar signos respiratorios y considerar soporte de oxigeno segun criterio medico.");
   if (patient.glucose >= 200) recommendations.push("Revisar plan metabolico y confirmar adherencia terapeutica.");
   if (patient.heartFailureHistory === "Si") recommendations.push("Correlacionar con balance hidrico y sintomas cardiovasculares.");
+  if (patient.coronaryHistory === "Si") recommendations.push("Cruzar sintomas actuales con antecedente coronario y ECG disponible.");
+  if (patient.arrhythmias === "Si") recommendations.push("Verificar ritmo, pulso efectivo y sintomas asociados a arritmia.");
+  if (patient.bnp >= 400) recommendations.push("BNP elevado: correlacionar con congestion, disnea y funcion cardiaca.");
   if (packHistory >= 40) recommendations.push(`Considerar intervencion intensiva sobre tabaquismo: ${packHistory} pack-years registrados.`);
   if (patient.respiratoryRate >= 28) recommendations.push("La frecuencia respiratoria amerita reevaluacion temprana y vigilancia estrecha por posible deterioro ventilatorio.");
   if (elevation >= 1400 && patient.smokingStatus !== "Nunca") recommendations.push(`La altitud de ${region.label} (${elevation} m) debe endurecer la lectura de saturacion y disnea.`);
@@ -2681,6 +2915,10 @@ function computeClinicalAssessment(patient) {
     patient.pulse,
     patient.glucose,
     patient.creatinine,
+    patient.bnp,
+    patient.ecg,
+    patient.coronaryHistory,
+    patient.arrhythmias,
     patient.copdGold,
     patient.locationCity,
     patient.packHistory,
@@ -2741,6 +2979,107 @@ function riskTone(value) {
   return "Riesgo bajo";
 }
 
+function buildDomainRiskTimeline(assessment) {
+  const respiratory = assessment.outcomeRisks?.respiratory || 0;
+  const cardiac = assessment.outcomeRisks?.cardiac || 0;
+  const symptom = assessment.outcomeRisks?.dangerousSymptom || 0;
+  const scaleForWindow = (base, factor, floor = 8) => Math.min(98, Math.max(floor, Math.round(base * factor)));
+
+  return [
+    {
+      label: "Riesgo respiratorio",
+      values: [
+        scaleForWindow(respiratory, 0.82),
+        scaleForWindow(Math.max(respiratory, assessment.shortRisk * 0.62), 0.95),
+        scaleForWindow(Math.max(respiratory, assessment.weekRisk * 0.55), 1),
+        scaleForWindow(Math.max(respiratory, assessment.longRisk * 0.48), 1.04),
+      ],
+    },
+    {
+      label: "Riesgo cardiaco",
+      values: [
+        scaleForWindow(cardiac, 0.82),
+        scaleForWindow(Math.max(cardiac, assessment.shortRisk * 0.5), 0.94),
+        scaleForWindow(Math.max(cardiac, assessment.weekRisk * 0.46), 1),
+        scaleForWindow(Math.max(cardiac, assessment.longRisk * 0.54), 1.05),
+      ],
+    },
+    {
+      label: "Sintoma peligroso",
+      values: [
+        scaleForWindow(symptom, 0.82),
+        scaleForWindow(Math.max(symptom, assessment.shortRisk * 0.46), 0.96),
+        scaleForWindow(Math.max(symptom, assessment.weekRisk * 0.42), 1),
+        scaleForWindow(Math.max(symptom, assessment.longRisk * 0.38), 1.02),
+      ],
+    },
+  ];
+}
+
+function buildRiskDrivers(patient, assessment) {
+  const drivers = [...(assessment.triggers || [])].filter((item) => !item.startsWith("Subriesgos")).slice(0, 6);
+  if (patient?.bnp >= 400) drivers.unshift(`BNP elevado (${patient.bnp} pg/mL) aumenta sospecha de carga cardiaca.`);
+  if (patient?.oxygenSaturation && patient.oxygenSaturation < assessment.expectedOxygen) {
+    drivers.unshift(`SpO2 bajo expectativa regional (${patient.oxygenSaturation}% vs ${Math.round(assessment.expectedOxygen)}%).`);
+  }
+  return drivers.length ? [...new Set(drivers)].slice(0, 6) : ["No hay impulsores mayores con los datos actuales."];
+}
+
+function buildProtectiveFactors(patient, assessment) {
+  const protective = [];
+  if (patient.status === "Estable") protective.push("Estado clinico registrado como estable.");
+  if (patient.oxygenSaturation && patient.oxygenSaturation >= Math.round(assessment.expectedOxygen)) {
+    protective.push(`SpO2 conservada para el contexto regional (${patient.oxygenSaturation}%).`);
+  }
+  if (patient.respiratoryRate && patient.respiratoryRate < 22) protective.push(`Frecuencia respiratoria sin taquipnea marcada (${patient.respiratoryRate} rpm).`);
+  if (patient.pulse && patient.pulse < 100) protective.push(`Pulso sin taquicardia (${patient.pulse} bpm).`);
+  if (patient.glucose && patient.glucose < 180) protective.push(`Glucosa sin hiperglucemia severa (${patient.glucose} mg/dL).`);
+  if (patient.heartFailureHistory !== "Si" && patient.coronaryHistory !== "Si") protective.push("Sin antecedente cardiaco mayor registrado.");
+  return protective.length ? protective.slice(0, 6) : ["No se identifican factores protectores fuertes; completar datos faltantes mejora la lectura."];
+}
+
+function buildClinicalCurvePoints(patient, assessment, type) {
+  const base = type === "spo2"
+    ? [84, 88, 90, 92, 94, 96, 98]
+    : [12, 16, 20, 24, 28, 32, 36];
+  return base.map((value) => {
+    const delta = type === "spo2"
+      ? Math.max(-16, Math.min(22, (Math.round(assessment.expectedOxygen) - value) * 4))
+      : Math.max(-14, Math.min(26, (value - 20) * 2.4));
+    return {
+      x: value,
+      y: Math.min(98, Math.max(5, Math.round(assessment.shortRisk + delta))),
+      active: type === "spo2"
+        ? Math.round(Number(patient.oxygenSaturation || 0)) === value
+        : Math.round(Number(patient.respiratoryRate || 0)) === value,
+    };
+  });
+}
+
+function renderClinicalCurve(points, xLabel) {
+  const width = 280;
+  const height = 120;
+  const plotLeft = 28;
+  const plotTop = 12;
+  const plotWidth = 230;
+  const plotHeight = 78;
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const toX = (value) => plotLeft + ((value - minX) / Math.max(1, maxX - minX)) * plotWidth;
+  const toY = (value) => plotTop + (1 - value / 100) * plotHeight;
+  const path = points.map((point, index) => `${index ? "L" : "M"} ${toX(point.x).toFixed(1)} ${toY(point.y).toFixed(1)}`).join(" ");
+
+  return `
+    <svg class="clinical-curve" viewBox="0 0 ${width} ${height}" role="img" aria-label="Curva ${escapeHtml(xLabel)} contra riesgo">
+      <path d="M ${plotLeft} ${plotTop} V ${plotTop + plotHeight} H ${plotLeft + plotWidth}" class="curve-axis"></path>
+      <path d="${path}" class="curve-line"></path>
+      ${points.map((point) => `<circle cx="${toX(point.x).toFixed(1)}" cy="${toY(point.y).toFixed(1)}" r="${point.active ? 5 : 3}" class="${point.active ? "curve-point active" : "curve-point"}"></circle>`).join("")}
+      <text x="${plotLeft}" y="${height - 10}" class="curve-label">${escapeHtml(xLabel)}</text>
+      <text x="${plotLeft + plotWidth - 48}" y="${plotTop + 10}" class="curve-label">Riesgo</text>
+    </svg>
+  `;
+}
+
 function renderMedicAi(patient) {
   if (!patient) {
     medicAiWidget.innerHTML = `
@@ -2753,6 +3092,11 @@ function renderMedicAi(patient) {
 
   const assessment = computeClinicalAssessment(patient);
   const trainingLines = getPopulationSummary();
+  const domainTimeline = buildDomainRiskTimeline(assessment);
+  const riskDrivers = buildRiskDrivers(patient, assessment);
+  const protectiveFactors = buildProtectiveFactors(patient, assessment);
+  const spo2Curve = buildClinicalCurvePoints(patient, assessment, "spo2");
+  const respiratoryRateCurve = buildClinicalCurvePoints(patient, assessment, "respiratoryRate");
 
   medicAiWidget.innerHTML = `
     <div class="ai-hero">
@@ -2776,21 +3120,67 @@ function renderMedicAi(patient) {
         <p class="ai-disclaimer">${escapeHtml(assessment.forecast.ifUntreated)}</p>
       </div>
 
-      <div class="risk-grid">
+      <div class="risk-grid risk-grid-legacy" hidden>
         <div class="risk-card">
-          <span>24 a 72 horas</span>
+          <span>24 horas</span>
           <strong>${assessment.shortRisk}% · ${riskTone(assessment.shortRisk)}</strong>
           <div class="risk-meter"><span style="width:${assessment.shortRisk}%"></span></div>
         </div>
         <div class="risk-card">
-          <span>1 semana</span>
+          <span>7 dias</span>
           <strong>${assessment.weekRisk}% · ${riskTone(assessment.weekRisk)}</strong>
           <div class="risk-meter"><span style="width:${assessment.weekRisk}%"></span></div>
         </div>
         <div class="risk-card">
-          <span>1+ mes</span>
+          <span>30 dias</span>
           <strong>${assessment.longRisk}% · ${riskTone(assessment.longRisk)}</strong>
           <div class="risk-meter"><span style="width:${assessment.longRisk}%"></span></div>
+        </div>
+      </div>
+
+      <div class="domain-risk-panel">
+        <div class="domain-risk-head">
+          <strong>Interpretabilidad por dominio clinico</strong>
+          <span>No se muestra un riesgo generico; cada ventana separa frente respiratorio, cardiaco y sintomas de alarma.</span>
+        </div>
+        <div class="domain-risk-table">
+          <div class="domain-risk-row domain-risk-header">
+            <span>Dominio</span>
+            <span>Actual</span>
+            <span>24 h</span>
+            <span>7 dias</span>
+            <span>30 dias</span>
+          </div>
+          ${domainTimeline.map((row) => `
+            <div class="domain-risk-row">
+              <strong>${escapeHtml(row.label)}</strong>
+              ${row.values.map((value) => `<span>${value}%<small>${escapeHtml(riskTone(value).replace("Riesgo ", ""))}</small><i style="--risk-width:${value}%"></i></span>`).join("")}
+            </div>
+          `).join("")}
+        </div>
+      </div>
+
+      <div class="explainability-grid">
+        <article class="ai-detail-card">
+          <strong>Factores que aumentan riesgo</strong>
+          <ul class="ai-detail-list">
+            ${riskDrivers.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </article>
+        <article class="ai-detail-card">
+          <strong>Factores protectores</strong>
+          <ul class="ai-detail-list">
+            ${protectiveFactors.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </article>
+      </div>
+
+      <div class="ai-detail-card">
+        <strong>Curvas clinicas de sensibilidad</strong>
+        <p class="ai-detail">Muestran como cambia el riesgo estimado al mover SpO2 o frecuencia respiratoria, manteniendo el resto del caso constante.</p>
+        <div class="clinical-curve-grid">
+          ${renderClinicalCurve(spo2Curve, "Riesgo vs SpO2")}
+          ${renderClinicalCurve(respiratoryRateCurve, "Riesgo vs FR")}
         </div>
       </div>
 
@@ -2854,10 +3244,10 @@ function renderDoctor(user) {
   doctorPhoto.src = photo;
   doctorMenuPhoto.src = photo;
   doctorChipName.textContent = name;
-  doctorChipRole.textContent = user.email || "Sesion segura con Firebase";
+  doctorChipRole.textContent = state.doctorProfile.role || "Medico general";
   userName.textContent = name;
   userEmail.textContent = user.email || "Sin correo";
-  userRole.textContent = "Perfil autenticado con foto, preferencias visuales y panel IA clinico.";
+  userRole.textContent = `Rol: ${state.doctorProfile.role || "Medico general"} | Perfil autenticado con panel IA clinico.`;
   doctorPanelName.textContent = `Medico: ${name}`;
   requestAnimationFrame(syncTopbarOffset);
 }
@@ -3019,9 +3409,7 @@ function clearWidgetPreviewTransforms() {
 }
 
 function getVisibleWidgetElements() {
-  return getVisibleWidgetKeys()
-    .map((key) => getWidgetElementByKey(key))
-    .filter(Boolean);
+  return getOrderedVisibleWidgetElements(state.draftLayoutOrder || state.layoutOrder);
 }
 
 function getCurrentVisibleSlotRects() {
@@ -3090,10 +3478,13 @@ function clampPlacementRect(rect, widgetSize, dashboardRect) {
   };
 }
 
-function buildInsertionCandidates(widgetKey) {
+function buildInsertionCandidates(widgetKey, excludeKey = null) {
   const dashboardRect = dashboardGrid.getBoundingClientRect();
   const widgetSize = getPlacementSizeForWidget(widgetKey);
-  const visibleElements = getVisibleWidgetElements();
+  const visibleElements = getOrderedVisibleWidgetElements(
+    state.draftLayoutOrder || state.layoutOrder,
+    excludeKey
+  );
   const candidates = [];
 
   if (!visibleElements.length) {
@@ -3109,17 +3500,18 @@ function buildInsertionCandidates(widgetKey) {
 
   visibleElements.forEach((widget) => {
     const rect = widget.getBoundingClientRect();
-    candidates.push(
-      clampPlacementRect(
-        {
-          left: rect.left,
-          top: rect.top,
-        },
-        widgetSize,
-        dashboardRect
-      )
+    const candidate = clampPlacementRect(
+      {
+        left: rect.left,
+        top: rect.top,
+      },
+      widgetSize,
+      dashboardRect
     );
-    candidates[candidates.length - 1].insertBeforeKey = widget.dataset.widgetKey;
+    candidate.insertBeforeKey = widget.dataset.widgetKey;
+    candidate.anchorX = rect.left + Math.min(44, rect.width / 2);
+    candidate.anchorY = rect.top + Math.min(44, rect.height / 2);
+    candidates.push(candidate);
   });
 
   const lastRect = visibleElements[visibleElements.length - 1].getBoundingClientRect();
@@ -3133,6 +3525,8 @@ function buildInsertionCandidates(widgetKey) {
     width: endWidth,
     height: widgetSize.height,
     insertBeforeKey: null,
+    anchorX: staysOnRow ? Math.min(dashboardRect.right - 18, endLeft + Math.min(44, endWidth / 2)) : dashboardRect.left + 58,
+    anchorY: staysOnRow ? lastRect.top + Math.min(44, lastRect.height / 2) : lastRect.bottom + Math.min(44, widgetSize.height / 2),
   });
 
   return candidates;
@@ -3181,7 +3575,7 @@ function updatePlacementVisuals(target, key, mode = "add") {
   state.placementTarget = { ...target, key };
 }
 
-function getInsertionTargetFromPoint(clientX, clientY, widgetKey) {
+function getInsertionTargetFromPoint(clientX, clientY, widgetKey, excludeKey = null) {
   const dashboardRect = dashboardGrid.getBoundingClientRect();
   const inside =
     clientX >= dashboardRect.left &&
@@ -3191,28 +3585,82 @@ function getInsertionTargetFromPoint(clientX, clientY, widgetKey) {
 
   if (!inside) return null;
 
-  const candidates = buildInsertionCandidates(widgetKey);
+  const orderedKeys = getOrderedVisibleWidgetKeys(
+    state.draftLayoutOrder || state.layoutOrder,
+    excludeKey
+  );
+  const hovered = document.elementFromPoint(clientX, clientY)?.closest?.("[data-widget-key]");
+  const hoveredKey = hovered?.dataset?.widgetKey;
+
+  if (hoveredKey && hoveredKey !== excludeKey && orderedKeys.includes(hoveredKey)) {
+    const rect = hovered.getBoundingClientRect();
+    const hoveredIndex = orderedKeys.indexOf(hoveredKey);
+    const nextKey = orderedKeys[hoveredIndex + 1] || null;
+    const topBand = rect.top + Math.min(84, rect.height * 0.28);
+    const bottomBand = rect.bottom - Math.min(84, rect.height * 0.28);
+    const leftBand = rect.left + Math.min(120, rect.width * 0.32);
+    const rightBand = rect.right - Math.min(120, rect.width * 0.32);
+    const prefersVerticalDecision = rect.height > rect.width * 0.78;
+    const candidates = buildInsertionCandidates(widgetKey, excludeKey);
+
+    if (clientY <= topBand) {
+      return candidates.find((candidate) => candidate.insertBeforeKey === hoveredKey) || null;
+    }
+
+    if (clientY >= bottomBand) {
+      return candidates.find((candidate) => candidate.insertBeforeKey === nextKey)
+        || candidates.find((candidate) => candidate.insertBeforeKey === null)
+        || null;
+    }
+
+    const insertBeforeKey = prefersVerticalDecision
+      ? (clientY <= rect.top + rect.height / 2 ? hoveredKey : nextKey)
+      : (clientX <= leftBand ? hoveredKey : clientX >= rightBand ? nextKey : (clientY <= rect.top + rect.height / 2 ? hoveredKey : nextKey));
+
+    return candidates.find((candidate) => candidate.insertBeforeKey === insertBeforeKey)
+      || candidates.find((candidate) => candidate.insertBeforeKey === null)
+      || null;
+  }
+
+  const candidates = buildInsertionCandidates(widgetKey, excludeKey);
   const nearest = candidates
-    .map((candidate) => {
-      const expandedRect = getExpandedRect(candidate);
-      return {
-        candidate,
-        insideExpanded:
-          clientX >= expandedRect.left &&
-          clientX <= expandedRect.right &&
-          clientY >= expandedRect.top &&
-          clientY <= expandedRect.bottom,
-        distance: getDistanceToRect(clientX, clientY, candidate),
-      };
-    })
-    .filter((entry) => entry.insideExpanded || entry.distance < 140)
+    .map((candidate) => ({
+      candidate,
+      distance: Math.hypot(
+        clientX - Number(candidate.anchorX || candidate.left),
+        clientY - Number(candidate.anchorY || candidate.top)
+      ),
+    }))
     .sort((a, b) => a.distance - b.distance)[0];
 
   return nearest?.candidate || null;
 }
 
+function applyDraftLayoutFromPointer(clientX, clientY) {
+  if (!state.layoutEditMode || !state.draggedWidgetKey) return;
+
+  const target = getInsertionTargetFromPoint(clientX, clientY, state.draggedWidgetKey, state.draggedWidgetKey);
+  if (!target) return;
+
+  const nextOrder = moveWidgetBefore(
+    state.draftLayoutOrder || state.layoutOrder,
+    state.draggedWidgetKey,
+    target.insertBeforeKey || null
+  );
+
+  if ((state.draftLayoutOrder || state.layoutOrder).join("|") === nextOrder.join("|")) {
+    return;
+  }
+
+  state.draftLayoutOrder = nextOrder;
+  applyWidgetOrder(state.draftLayoutOrder);
+}
+
 function getDeleteTargetFromPoint(clientX, clientY) {
-  const hovered = document.elementFromPoint(clientX, clientY)?.closest?.("[data-widget-key]");
+  const hovered = document
+    .elementsFromPoint(clientX, clientY)
+    .map((element) => element.closest?.("[data-widget-key]"))
+    .find(Boolean);
   if (!hovered || hovered.hidden) return null;
   const key = hovered.dataset.widgetKey;
   if (!isWidgetVisible(key)) return null;
@@ -3240,6 +3688,29 @@ function cancelWidgetInteraction(message = "Operacion cancelada.") {
 
 function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function autoScrollViewportForWidgetDrag(clientY) {
+  if (!state.layoutEditMode || !state.draggedWidgetKey) return;
+
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (!viewportHeight) return;
+
+  const topDistance = Math.max(0, clientY);
+  const bottomDistance = Math.max(0, viewportHeight - clientY);
+  let scrollDelta = 0;
+
+  if (topDistance < WIDGET_DRAG_SCROLL_EDGE_PX) {
+    const intensity = 1 - topDistance / WIDGET_DRAG_SCROLL_EDGE_PX;
+    scrollDelta = -Math.ceil(WIDGET_DRAG_SCROLL_MAX_STEP * intensity);
+  } else if (bottomDistance < WIDGET_DRAG_SCROLL_EDGE_PX) {
+    const intensity = 1 - bottomDistance / WIDGET_DRAG_SCROLL_EDGE_PX;
+    scrollDelta = Math.ceil(WIDGET_DRAG_SCROLL_MAX_STEP * intensity);
+  }
+
+  if (scrollDelta) {
+    window.scrollBy({ top: scrollDelta, behavior: "auto" });
+  }
 }
 
 function getResizeDirectionForPointer(widget, clientX, clientY) {
@@ -3309,6 +3780,12 @@ function handleWidgetResizeMove(event) {
 }
 
 function stopWidgetResize() {
+  if (state.resizeSession?.key) {
+    const widget = getWidgetElementByKey(state.resizeSession.key);
+    if (widget) {
+      widget.setAttribute("draggable", state.layoutEditMode ? "true" : "false");
+    }
+  }
   state.resizeSession = null;
 }
 
@@ -3618,7 +4095,7 @@ function renderWorkspaceAction(action) {
           </article>
           <article class="workspace-card">
             <strong>Regla operativa</strong>
-            <p>Prioriza saturacion de O2, frecuencia respiratoria, glucosa y alertas a 72 horas.</p>
+            <p>Prioriza saturacion de O2, frecuencia respiratoria, glucosa y alertas a 24 horas.</p>
           </article>
         </div>
       `
@@ -3707,7 +4184,7 @@ function renderWorkspaceAction(action) {
             </article>
             <article class="workspace-card">
               <strong>Ventanas de riesgo</strong>
-              <p>72h: ${assessment.shortRisk}% · 1 semana: ${assessment.weekRisk}% · 1+ mes: ${assessment.longRisk}%.</p>
+              <p>24h: ${assessment.shortRisk}% · 7 dias: ${assessment.weekRisk}% · 30 dias: ${assessment.longRisk}%.</p>
             </article>
           </div>
         `
@@ -3725,6 +4202,7 @@ function renderDashboard() {
   renderMedicAi(patient);
   renderConsultationAnalysis(patient);
   renderPatients();
+  renderQuestionnaires();
   renderStackList(alertsWidget, buildAlerts(patient), "alerts");
   renderStackList(agendaWidget, buildAgenda(patient));
   renderStackList(statusWidget, buildStatusLines(patient));
@@ -3738,12 +4216,17 @@ function renderDashboard() {
   saveNotesButton.disabled = !patient;
 
   const riskCount = state.patients.filter((item) => getRiskScore(item) >= 5).length;
+  const areas = [...new Set(state.patients.map((item) => item.ward).filter(Boolean))].slice(0, 3);
+  if (patientModuleCount) patientModuleCount.textContent = String(state.patients.length);
+  if (patientModuleAreas) patientModuleAreas.textContent = areas.length ? areas.join(", ") : "Sin areas";
+  if (patientModuleRole) patientModuleRole.textContent = state.doctorProfile.role || "Medico general";
   doctorPanelPatients.textContent = `Pacientes registrados: ${state.patients.length}`;
   doctorPanelRisk.textContent = `Pacientes en riesgo: ${riskCount}`;
   doctorPanelTraining.textContent = state.trainingProfile.ready
     ? `Motor IA: ${state.trainingProfile.selectedModelName} (${state.trainingProfile.selectedModelPrecision}%)`
     : "Motor IA: usando perfil base mientras carga dataset";
   renderAiDebugWindow();
+  requestAnimationFrame(syncResponsiveWidgetShapes);
 }
 
 async function loadClinicalTrainingProfile() {
@@ -3797,7 +4280,7 @@ async function createPatientAlert() {
   }
 
   const assessment = computeClinicalAssessment(patient);
-  const alertText = `[Alerta IA] ${new Date().toLocaleString("es-CO")}: Riesgo 72h ${assessment.shortRisk}%, 1 semana ${assessment.weekRisk}%, 1+ mes ${assessment.longRisk}%. ${assessment.summary}`;
+  const alertText = `[Alerta IA] ${new Date().toLocaleString("es-CO")}: Riesgo 24h ${assessment.shortRisk}%, 7 dias ${assessment.weekRisk}%, 30 dias ${assessment.longRisk}%. ${assessment.summary}`;
 
   try {
     await updateDoc(doc(db, "patients", patient.id), {
@@ -3880,6 +4363,11 @@ document.addEventListener("mousemove", (event) => {
   if (state.uiMode === "remove-widget") {
     handleWidgetInteractionMove(event);
   }
+});
+
+document.addEventListener("dragover", (event) => {
+  if (!state.layoutEditMode || !state.draggedWidgetKey) return;
+  autoScrollViewportForWidgetDrag(event.clientY);
 });
 
 document.addEventListener("mouseup", () => {
@@ -3997,6 +4485,7 @@ widgetElements.forEach((widget) => {
     const direction = getResizeDirectionForPointer(widget, event.clientX, event.clientY);
     if (!direction) return;
     event.preventDefault();
+    widget.setAttribute("draggable", "false");
     beginWidgetResize(widget, direction, event);
   });
 
@@ -4007,26 +4496,54 @@ widgetElements.forEach((widget) => {
     }
 
     state.draggedWidgetKey = widget.dataset.widgetKey;
+    state.draftLayoutOrder = [...(state.draftLayoutOrder || state.layoutOrder)];
     widget.classList.add("dragging");
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", state.draggedWidgetKey);
+      event.dataTransfer.setDragImage(transparentDragImage, 0, 0);
+    }
   });
 
   widget.addEventListener("dragend", () => {
     widget.classList.remove("dragging");
     state.draggedWidgetKey = null;
+    widget.setAttribute("draggable", state.layoutEditMode ? "true" : "false");
+    updatePlacementVisuals(null, "");
   });
 
   widget.addEventListener("dragover", (event) => {
     if (!state.layoutEditMode || !state.draggedWidgetKey) return;
 
     event.preventDefault();
-    const targetKey = widget.dataset.widgetKey;
-    state.draftLayoutOrder = reorderList(
-      state.draftLayoutOrder || state.layoutOrder,
-      state.draggedWidgetKey,
-      targetKey
-    );
-    applyWidgetOrder(state.draftLayoutOrder);
   });
+});
+
+dashboardGrid.addEventListener("dragover", (event) => {
+  if (!state.layoutEditMode || !state.draggedWidgetKey) return;
+
+  event.preventDefault();
+
+  const target = getInsertionTargetFromPoint(
+    event.clientX,
+    event.clientY,
+    state.draggedWidgetKey,
+    state.draggedWidgetKey
+  );
+  updatePlacementVisuals(target, state.draggedWidgetKey);
+});
+
+dashboardGrid.addEventListener("dragleave", (event) => {
+  if (!state.layoutEditMode || !state.draggedWidgetKey) return;
+  if (dashboardGrid.contains(event.relatedTarget)) return;
+  updatePlacementVisuals(null, "");
+});
+
+dashboardGrid.addEventListener("drop", (event) => {
+  if (!state.layoutEditMode || !state.draggedWidgetKey) return;
+  event.preventDefault();
+  applyDraftLayoutFromPointer(event.clientX, event.clientY);
+  updatePlacementVisuals(null, "");
 });
 
 cancelLayoutButton.addEventListener("click", () => {
@@ -4060,69 +4577,306 @@ saveLayoutButton.addEventListener("click", async () => {
   }
 });
 
+function getPatientByIdentifier(identifier) {
+  const normalized = String(identifier || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return state.patients.find((patient) =>
+    patient.id.toLowerCase() === normalized || String(patient.documentId || "").trim().toLowerCase() === normalized
+  ) || null;
+}
+
+function buildPatientFormMarkup(mode = "create", patient = {}) {
+  const isEdit = mode === "edit";
+  const value = (key) => escapeHtml(patient?.[key] ?? "");
+  const selected = (key, option) => String(patient?.[key] || "") === option ? "selected" : "";
+  return `
+    <form id="patientForm" class="patient-form" data-mode="${escapeHtml(mode)}" data-patient-id="${escapeHtml(patient.id || "")}">
+      ${isEdit ? `<input type="text" name="lookup" placeholder="ID interno o cedula para cargar paciente">` : ""}
+      <div class="form-section-title">Identificacion minima obligatoria</div>
+      <div class="field-grid">
+        <input type="text" name="name" placeholder="Nombre completo" value="${value("name")}" required>
+        <input type="text" name="documentId" placeholder="Documento / cedula" value="${value("documentId")}" required>
+        <input type="number" name="age" min="0" placeholder="Edad actual" value="${value("age")}" required>
+        <input type="text" name="condition" placeholder="Condicion principal" value="${value("condition")}" required>
+        <select name="status" required>
+          <option value="">Estado del paciente</option>
+          <option value="Estable" ${selected("status", "Estable")}>Estable</option>
+          <option value="Riesgo" ${selected("status", "Riesgo")}>Riesgo</option>
+          <option value="Critico" ${selected("status", "Critico")}>Critico</option>
+        </select>
+        <select name="locationCity">
+          <option value="">Ciudad de consulta</option>
+          ${Object.keys(regionProfiles).map((city) => `<option value="${city}" ${selected("locationCity", city)}>${city}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-section-title">Signos, laboratorio y contexto respiratorio</div>
+      <div class="field-grid">
+        <label class="time-field upload-field"><span>Foto opcional del paciente</span><input type="file" name="photoFile" accept="image/*"></label>
+        <input type="number" name="bloodPressureSystolic" min="0" placeholder="Presion sistolica" value="${value("bloodPressureSystolic")}">
+        <input type="number" name="bloodPressureDiastolic" min="0" placeholder="Presion diastolica" value="${value("bloodPressureDiastolic")}">
+        <input type="number" name="pulse" min="0" placeholder="Pulso bpm" value="${value("pulse")}">
+        <input type="number" name="glucose" min="0" placeholder="Glucosa mg/dL" value="${value("glucose")}">
+        <input type="number" step="0.1" name="oxygenSaturation" min="0" max="100" placeholder="Saturacion O2 %" value="${value("oxygenSaturation")}">
+        <input type="number" name="respiratoryRate" min="0" placeholder="Frecuencia respiratoria" value="${value("respiratoryRate")}">
+        <input type="number" step="0.1" name="hemoglobin" min="0" placeholder="Hemoglobina g/dL" value="${value("hemoglobin")}">
+        <input type="number" step="0.1" name="creatinine" min="0" placeholder="Creatinina mg/dL" value="${value("creatinine")}">
+        <input type="number" step="0.1" name="bmi" min="0" placeholder="IMC" value="${value("bmi")}">
+        <input type="number" name="packHistory" min="0" placeholder="Carga tabaquica (pack-years)" value="${value("packHistory")}">
+        <select name="copdGold">
+          <option value="">COPD GOLD</option>
+          <option value="1" ${selected("copdGold", "1")}>GOLD 1</option>
+          <option value="2" ${selected("copdGold", "2")}>GOLD 2</option>
+          <option value="3" ${selected("copdGold", "3")}>GOLD 3</option>
+          <option value="4" ${selected("copdGold", "4")}>GOLD 4</option>
+        </select>
+        <select name="smokingStatus">
+          <option value="">Estado de tabaquismo</option>
+          <option value="Nunca" ${selected("smokingStatus", "Nunca")}>Nunca</option>
+          <option value="Exfumador" ${selected("smokingStatus", "Exfumador")}>Exfumador</option>
+          <option value="Activo" ${selected("smokingStatus", "Activo")}>Activo</option>
+          <option value="Alta carga" ${selected("smokingStatus", "Alta carga")}>Alta carga</option>
+        </select>
+      </div>
+      <div class="form-section-title">Apartado cardiovascular</div>
+      <div class="field-grid">
+        <input type="text" name="ecg" placeholder="ECG / hallazgo electrocardiografico" value="${value("ecg")}">
+        <input type="number" name="bnp" min="0" placeholder="BNP pg/mL" value="${value("bnp")}">
+        <select name="heartFailureHistory"><option value="">Antecedente de falla cardiaca</option><option value="No" ${selected("heartFailureHistory", "No")}>No</option><option value="Si" ${selected("heartFailureHistory", "Si")}>Si</option></select>
+        <select name="coronaryHistory"><option value="">Antecedentes coronarios</option><option value="No" ${selected("coronaryHistory", "No")}>No</option><option value="Si" ${selected("coronaryHistory", "Si")}>Si</option></select>
+        <select name="arrhythmias"><option value="">Arritmias</option><option value="No" ${selected("arrhythmias", "No")}>No</option><option value="Si" ${selected("arrhythmias", "Si")}>Si</option></select>
+      </div>
+      <div class="form-section-title">Consulta, area y agenda</div>
+      <div class="field-grid">
+        <input type="text" name="ward" placeholder="Area / servicio" value="${value("ward")}">
+        <input type="text" name="room" placeholder="Habitacion / cama" value="${value("room")}">
+        <label class="time-field"><span>Hora de consulta</span><input type="time" name="appointmentTime" value="${value("appointmentTime")}"></label>
+        <label class="time-field"><span>Hora de monitoreo</span><input type="time" name="monitoringTime" value="${value("monitoringTime")}"></label>
+        <label class="time-field"><span>Hora de laboratorio</span><input type="time" name="labTime" value="${value("labTime")}"></label>
+      </div>
+      <textarea name="notes" placeholder="Notas clinicas o seguimiento">${value("notes")}</textarea>
+      <div class="patient-modal-actions">
+        ${isEdit ? `<button type="button" class="ghost-button" data-patient-crud="load-edit">Cargar por ID o cedula</button>` : ""}
+        <button type="submit" id="savePatientButton">${isEdit ? "Guardar cambios" : "Crear paciente"}</button>
+        <button type="button" class="ghost-button" data-patient-crud="cancel">Cancelar</button>
+      </div>
+    </form>
+  `;
+}
+
+function collectPatientPayload(form) {
+  const formData = new FormData(form);
+  const patientPhotoFile = formData.get("photoFile");
+  return { formData, patientPhotoFile };
+}
+
 async function savePatient(event) {
   event.preventDefault();
-
-  const formData = new FormData(patientForm);
+  const form = event.currentTarget;
+  const mode = form.dataset.mode || "create";
+  const patientId = form.dataset.patientId || "";
+  const { formData, patientPhotoFile } = collectPatientPayload(form);
   const requiredFields = ["name", "documentId", "age", "condition", "status"];
   const missingField = requiredFields.find((field) => !String(formData.get(field) || "").trim());
+  const saveButton = form.querySelector("#savePatientButton");
 
   if (missingField) {
-    setStatus("Completa todos los campos obligatorios del paciente.", "error");
+    setStatus("Completa nombre, cedula/ID, edad, condicion y estado para identificar al paciente.", "error");
     return;
   }
 
-  savePatientButton.disabled = true;
-  savePatientButton.textContent = "Guardando...";
+  saveButton.disabled = true;
+  saveButton.textContent = "Guardando...";
 
   try {
-    const patientPhotoFile = formData.get("photoFile");
     const patientPhotoUrl =
       patientPhotoFile instanceof File && patientPhotoFile.size > 0
         ? await readFileAsDataUrl(patientPhotoFile)
         : "";
-
-    await addDoc(collection(db, "patients"), {
-      ...sanitizePatientPayload({
-        name: formData.get("name"),
-        documentId: formData.get("documentId"),
-        age: formData.get("age"),
-        condition: formData.get("condition"),
-        status: formData.get("status"),
-        photoUrl: patientPhotoUrl,
-        bloodPressureSystolic: formData.get("bloodPressureSystolic"),
-        bloodPressureDiastolic: formData.get("bloodPressureDiastolic"),
-        pulse: formData.get("pulse"),
-        glucose: formData.get("glucose"),
-        oxygenSaturation: formData.get("oxygenSaturation"),
-        respiratoryRate: formData.get("respiratoryRate"),
-        hemoglobin: formData.get("hemoglobin"),
-        creatinine: formData.get("creatinine"),
-        bmi: formData.get("bmi"),
-        packHistory: formData.get("packHistory"),
-        copdGold: formData.get("copdGold"),
-        smokingStatus: formData.get("smokingStatus"),
-        heartFailureHistory: formData.get("heartFailureHistory"),
-        locationCity: formData.get("locationCity"),
-        ward: formData.get("ward"),
-        room: formData.get("room"),
-        appointmentTime: formData.get("appointmentTime"),
-        monitoringTime: formData.get("monitoringTime"),
-        labTime: formData.get("labTime"),
-        notes: formData.get("notes"),
-      }),
-      createdAt: serverTimestamp(),
-      createdBy: auth.currentUser?.uid || "",
+    const payload = sanitizePatientPayload({
+      name: formData.get("name"),
+      documentId: formData.get("documentId"),
+      age: formData.get("age"),
+      condition: formData.get("condition"),
+      status: formData.get("status"),
+      photoUrl: patientPhotoUrl || getPatientByIdentifier(patientId)?.photoUrl || "",
+      bloodPressureSystolic: formData.get("bloodPressureSystolic"),
+      bloodPressureDiastolic: formData.get("bloodPressureDiastolic"),
+      pulse: formData.get("pulse"),
+      glucose: formData.get("glucose"),
+      oxygenSaturation: formData.get("oxygenSaturation"),
+      respiratoryRate: formData.get("respiratoryRate"),
+      hemoglobin: formData.get("hemoglobin"),
+      creatinine: formData.get("creatinine"),
+      bmi: formData.get("bmi"),
+      packHistory: formData.get("packHistory"),
+      copdGold: formData.get("copdGold"),
+      smokingStatus: formData.get("smokingStatus"),
+      heartFailureHistory: formData.get("heartFailureHistory"),
+      ecg: formData.get("ecg"),
+      bnp: formData.get("bnp"),
+      coronaryHistory: formData.get("coronaryHistory"),
+      arrhythmias: formData.get("arrhythmias"),
+      locationCity: formData.get("locationCity"),
+      ward: formData.get("ward"),
+      room: formData.get("room"),
+      appointmentTime: formData.get("appointmentTime"),
+      monitoringTime: formData.get("monitoringTime"),
+      labTime: formData.get("labTime"),
+      notes: formData.get("notes"),
     });
 
-    patientForm.reset();
-    setStatus("Paciente guardado en Firebase con sus datos clinicos.", "success");
+    if (mode === "edit" && patientId) {
+      await updateDoc(doc(db, "patients", patientId), { ...payload, updatedAt: serverTimestamp() });
+      setStatus("Paciente actualizado correctamente.", "success");
+    } else {
+      await addDoc(collection(db, "patients"), {
+        ...payload,
+        createdAt: serverTimestamp(),
+        createdBy: auth.currentUser?.uid || "",
+      });
+      form.reset();
+      setStatus("Paciente creado en Firebase con datos clinicos.", "success");
+    }
+    closePatientCrudModal();
   } catch (error) {
     setStatus(formatAppError(error, "guardado del paciente"), "error");
   } finally {
-    savePatientButton.disabled = false;
-    savePatientButton.textContent = "Guardar paciente";
+    saveButton.disabled = false;
+    saveButton.textContent = mode === "edit" ? "Guardar cambios" : "Crear paciente";
   }
+}
+
+function closePatientCrudModal() {
+  if (!patientCrudModal) return;
+  patientCrudModal.hidden = true;
+  patientCrudBody.innerHTML = "";
+}
+
+function renderPatientCrudModal(title, content) {
+  patientCrudTitle.textContent = title;
+  patientCrudBody.innerHTML = content;
+  patientCrudModal.hidden = false;
+}
+
+function openCreatePatientModal() {
+  renderPatientCrudModal("Crear paciente", buildPatientFormMarkup("create"));
+}
+
+function openEditPatientModal(patient = null) {
+  renderPatientCrudModal("Editar paciente", buildPatientFormMarkup("edit", patient || {}));
+}
+
+function openLookupModal(action) {
+  const labels = {
+    edit: "Editar paciente",
+    view: "Ver historia clinica",
+    delete: "Eliminar paciente",
+    appointment: "Registrar cita medica de hoy",
+  };
+  renderPatientCrudModal(
+    labels[action] || "Buscar paciente",
+    `
+      <form class="patient-form patient-lookup-form" data-lookup-action="${escapeHtml(action)}">
+        <input type="text" name="identifier" placeholder="ID interno o cedula del paciente" required>
+        ${action === "delete" ? `<p class="ai-disclaimer">La eliminacion requiere dos confirmaciones del medico.</p>` : ""}
+        <div class="patient-modal-actions">
+          <button type="submit">${escapeHtml(labels[action] || "Buscar")}</button>
+          <button type="button" class="ghost-button" data-patient-crud="cancel">Cancelar</button>
+        </div>
+      </form>
+    `
+  );
+}
+
+function renderPatientHistory(patient) {
+  const assessment = computeClinicalAssessment(patient);
+  const timeline = buildDomainRiskTimeline(assessment);
+  renderPatientCrudModal(
+    "Historia clinica del paciente",
+    `
+      <div class="patient-history">
+        <article class="workspace-card">
+          <strong>${escapeHtml(patient.name)}</strong>
+          <p>Documento: ${escapeHtml(patient.documentId)} | Edad: ${escapeHtml(patient.age)} | Estado: ${escapeHtml(patient.status)}</p>
+          <p>Condicion: ${escapeHtml(patient.condition)} | Ciudad: ${escapeHtml(patient.locationCity)}</p>
+          <p>Area: ${escapeHtml(patient.ward || "Sin area")} | Habitacion: ${escapeHtml(patient.room || "Sin habitacion")}</p>
+        </article>
+        <article class="workspace-card">
+          <strong>Cardiovascular</strong>
+          <p>Presion sistolica: ${patient.bloodPressureSystolic || "Sin dato"} mmHg</p>
+          <p>ECG: ${escapeHtml(patient.ecg || "Sin dato")}</p>
+          <p>BNP: ${patient.bnp || "Sin dato"} pg/mL</p>
+          <p>Antecedentes coronarios: ${escapeHtml(patient.coronaryHistory || "Sin dato")}</p>
+          <p>Arritmias: ${escapeHtml(patient.arrhythmias || "Sin dato")}</p>
+        </article>
+        <article class="workspace-card">
+          <strong>Interpretabilidad IA</strong>
+          ${timeline.map((row) => `<p>${escapeHtml(row.label)}: actual ${row.values[0]}% (${escapeHtml(riskTone(row.values[0]))}), 24h ${row.values[1]}% (${escapeHtml(riskTone(row.values[1]))}), 7 dias ${row.values[2]}% (${escapeHtml(riskTone(row.values[2]))}), 30 dias ${row.values[3]}% (${escapeHtml(riskTone(row.values[3]))}).</p>`).join("")}
+        </article>
+        <article class="workspace-card">
+          <strong>Notas</strong>
+          <p>${escapeHtml(patient.notes || "Sin notas registradas.")}</p>
+        </article>
+      </div>
+    `
+  );
+}
+
+function openDeleteConfirmation(patient) {
+  renderPatientCrudModal(
+    "Eliminar paciente",
+    `
+      <form class="patient-form patient-delete-form" data-patient-id="${escapeHtml(patient.id)}">
+        <p>Primera confirmacion: vas a eliminar a ${escapeHtml(patient.name)} (${escapeHtml(patient.documentId)}).</p>
+        <label class="time-field">
+          <span>Segunda confirmacion</span>
+          <input type="text" name="confirmation" placeholder="Escribe ELIMINAR">
+        </label>
+        <div class="patient-modal-actions">
+          <button type="submit" class="ghost-button danger">Eliminar definitivamente</button>
+          <button type="button" class="ghost-button" data-patient-crud="cancel">Cancelar</button>
+        </div>
+      </form>
+    `
+  );
+}
+
+function openAppointmentModal(patient) {
+  renderPatientCrudModal(
+    "Registrar cita medica de hoy",
+    `
+      <form class="patient-form patient-appointment-form" data-patient-id="${escapeHtml(patient.id)}">
+        <div class="field-grid">
+          <input type="number" name="age" min="0" placeholder="Edad actual" value="${escapeHtml(patient.age)}" required>
+          <input type="text" name="condition" placeholder="Condicion de la consulta" value="${escapeHtml(patient.condition)}" required>
+          <select name="status" required>
+            <option value="Estable" ${patient.status === "Estable" ? "selected" : ""}>Estable</option>
+            <option value="Riesgo" ${patient.status === "Riesgo" ? "selected" : ""}>Riesgo</option>
+            <option value="Critico" ${patient.status === "Critico" ? "selected" : ""}>Critico</option>
+          </select>
+          <select name="locationCity">${Object.keys(regionProfiles).map((city) => `<option value="${city}" ${patient.locationCity === city ? "selected" : ""}>${city}</option>`).join("")}</select>
+          <input type="number" name="bloodPressureSystolic" min="0" placeholder="Presion sistolica" value="${escapeHtml(patient.bloodPressureSystolic)}">
+          <input type="number" name="bloodPressureDiastolic" min="0" placeholder="Presion diastolica" value="${escapeHtml(patient.bloodPressureDiastolic)}">
+          <input type="number" name="pulse" min="0" placeholder="Pulso bpm" value="${escapeHtml(patient.pulse)}">
+          <input type="number" step="0.1" name="oxygenSaturation" min="0" max="100" placeholder="Saturacion O2 %" value="${escapeHtml(patient.oxygenSaturation)}">
+          <input type="number" name="respiratoryRate" min="0" placeholder="Frecuencia respiratoria" value="${escapeHtml(patient.respiratoryRate)}">
+          <input type="number" name="glucose" min="0" placeholder="Glucosa mg/dL" value="${escapeHtml(patient.glucose)}">
+          <input type="text" name="ecg" placeholder="ECG" value="${escapeHtml(patient.ecg)}">
+          <input type="number" name="bnp" min="0" placeholder="BNP pg/mL" value="${escapeHtml(patient.bnp)}">
+          <input type="number" step="0.1" name="hemoglobin" min="0" placeholder="Hemoglobina g/dL" value="${escapeHtml(patient.hemoglobin)}">
+          <input type="number" step="0.1" name="creatinine" min="0" placeholder="Creatinina mg/dL" value="${escapeHtml(patient.creatinine)}">
+          <input type="text" name="ward" placeholder="Area / servicio" value="${escapeHtml(patient.ward)}">
+          <label class="time-field"><span>Hora de consulta</span><input type="time" name="appointmentTime" value="${escapeHtml(patient.appointmentTime)}"></label>
+          <label class="time-field"><span>Hora de laboratorio</span><input type="time" name="labTime" value="${escapeHtml(patient.labTime)}"></label>
+        </div>
+        <textarea name="notes" placeholder="Datos de la consulta medica, laboratorio u observaciones">${escapeHtml(patient.notes)}</textarea>
+        <div class="patient-modal-actions">
+          <button type="submit">Registrar cita</button>
+          <button type="button" class="ghost-button" data-patient-crud="cancel">Cancelar</button>
+        </div>
+      </form>
+    `
+  );
 }
 
 async function savePatientNotes() {
@@ -4149,9 +4903,222 @@ async function savePatientNotes() {
   }
 }
 
-patientForm.addEventListener("submit", savePatient);
 saveNotesButton.addEventListener("click", savePatientNotes);
 closeWorkspaceButton.addEventListener("click", closeWorkspace);
+
+if (closePatientCrudButton) {
+  closePatientCrudButton.addEventListener("click", closePatientCrudModal);
+}
+
+document.querySelectorAll("[data-patient-module-action]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const action = button.dataset.patientModuleAction;
+    if (action === "create") openCreatePatientModal();
+    else openLookupModal(action);
+  });
+});
+
+if (patientCrudModal) {
+  patientCrudModal.addEventListener("click", async (event) => {
+    if (event.target === patientCrudModal) closePatientCrudModal();
+    const crudAction = event.target.dataset.patientCrud;
+    if (crudAction === "cancel") closePatientCrudModal();
+    if (crudAction === "load-edit") {
+      const form = event.target.closest("form");
+      const patient = getPatientByIdentifier(form?.elements.lookup?.value);
+      if (!patient) {
+        setStatus("No se encontro un paciente con ese ID o cedula.", "error");
+        return;
+      }
+      openEditPatientModal(patient);
+    }
+  });
+
+  patientCrudModal.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.target;
+
+    if (form.id === "patientForm") {
+      await savePatient(event);
+      return;
+    }
+
+    if (form.classList.contains("patient-lookup-form")) {
+      const patient = getPatientByIdentifier(new FormData(form).get("identifier"));
+      const action = form.dataset.lookupAction;
+      if (!patient) {
+        setStatus("No se encontro un paciente con ese ID o cedula.", "error");
+        return;
+      }
+      if (action === "edit") openEditPatientModal(patient);
+      if (action === "view") renderPatientHistory(patient);
+      if (action === "delete") openDeleteConfirmation(patient);
+      if (action === "appointment") openAppointmentModal(patient);
+      return;
+    }
+
+    if (form.classList.contains("patient-delete-form")) {
+      const confirmation = String(new FormData(form).get("confirmation") || "").trim().toUpperCase();
+      if (confirmation !== "ELIMINAR") {
+        setStatus("Para confirmar la eliminacion escribe ELIMINAR.", "error");
+        return;
+      }
+      try {
+        await deleteDoc(doc(db, "patients", form.dataset.patientId));
+        if (state.selectedPatientId === form.dataset.patientId) state.selectedPatientId = null;
+        closePatientCrudModal();
+        setStatus("Paciente eliminado con doble confirmacion.", "success");
+      } catch (error) {
+        setStatus(formatAppError(error, "eliminacion del paciente"), "error");
+      }
+      return;
+    }
+
+    if (form.classList.contains("patient-appointment-form")) {
+      const formData = new FormData(form);
+      try {
+        await updateDoc(doc(db, "patients", form.dataset.patientId), {
+          age: Number(formData.get("age") || 0),
+          condition: String(formData.get("condition") || "").trim(),
+          status: String(formData.get("status") || "Estable").trim(),
+          locationCity: String(formData.get("locationCity") || "").trim(),
+          bloodPressureSystolic: Number(formData.get("bloodPressureSystolic") || 0),
+          bloodPressureDiastolic: Number(formData.get("bloodPressureDiastolic") || 0),
+          pulse: Number(formData.get("pulse") || 0),
+          oxygenSaturation: normalizeOxygenValue(formData.get("oxygenSaturation")),
+          respiratoryRate: Number(formData.get("respiratoryRate") || 0),
+          glucose: Number(formData.get("glucose") || 0),
+          ecg: String(formData.get("ecg") || "").trim(),
+          bnp: Number(formData.get("bnp") || 0),
+          hemoglobin: Number(formData.get("hemoglobin") || 0),
+          creatinine: Number(formData.get("creatinine") || 0),
+          ward: String(formData.get("ward") || "").trim(),
+          appointmentTime: String(formData.get("appointmentTime") || "").trim(),
+          labTime: String(formData.get("labTime") || "").trim(),
+          notes: String(formData.get("notes") || "").trim(),
+          lastConsultationAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        closePatientCrudModal();
+        setStatus("Cita medica del dia registrada.", "success");
+      } catch (error) {
+        setStatus(formatAppError(error, "registro de cita medica"), "error");
+      }
+    }
+  });
+}
+
+function getSelectedQuestionnaire() {
+  return state.questionnaires.find((item) => item.id === state.selectedQuestionnaireId) || state.questionnaires[0] || null;
+}
+
+function renderQuestionnaires() {
+  if (!questionnairesWidget) return;
+
+  const selected = getSelectedQuestionnaire();
+  const patient = getSelectedPatient();
+
+  questionnairesWidget.innerHTML = `
+    <form id="questionnaireForm" class="patient-form questionnaire-form">
+      <div class="field-grid">
+        <input type="text" name="title" placeholder="Nombre del cuestionario" required>
+        <input type="text" name="purpose" placeholder="Uso clinico: CAT, disnea, adherencia, cardiaco...">
+        <input type="url" name="url" placeholder="Link de Google/Microsoft Forms">
+        <label class="time-field upload-field">
+          <span>QR opcional del formulario</span>
+          <input type="file" name="qrFile" accept="image/*">
+        </label>
+      </div>
+      <button type="submit">Guardar cuestionario</button>
+    </form>
+    <div class="questionnaire-selector">
+      <select id="questionnaireSelect">
+        <option value="">Seleccionar cuestionario para mostrar</option>
+        ${state.questionnaires.map((item) => `
+          <option value="${escapeHtml(item.id)}" ${item.id === selected?.id ? "selected" : ""}>${escapeHtml(item.title)}</option>
+        `).join("")}
+      </select>
+      <button type="button" class="ghost-button danger" data-questionnaire-action="delete" ${selected ? "" : "disabled"}>Eliminar</button>
+    </div>
+    <div class="questionnaire-display">
+      ${selected ? `
+        <article class="questionnaire-card">
+          <div>
+            <span class="eyebrow">Formulario seleccionado</span>
+            <strong>${escapeHtml(selected.title)}</strong>
+            <p>${escapeHtml(selected.purpose || "Sin indicacion especifica.")}</p>
+            <p>Paciente: ${patient ? escapeHtml(patient.name) : "Sin paciente seleccionado"}</p>
+          </div>
+          ${selected.qrDataUrl ? `<img src="${selected.qrDataUrl}" alt="QR de ${escapeHtml(selected.title)}" class="questionnaire-qr">` : ""}
+          ${selected.url ? `<a class="ghost-button questionnaire-link" href="${escapeHtml(selected.url)}" target="_blank" rel="noopener">Abrir formulario</a>` : ""}
+        </article>
+      ` : `<div class="empty-state">Guarda un link o una imagen QR para mostrar el cuestionario que el medico seleccione.</div>`}
+    </div>
+  `;
+}
+
+function loadQuestionnaires() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(QUESTIONNAIRES_STORAGE_KEY) || "[]");
+    state.questionnaires = Array.isArray(parsed) ? parsed : [];
+    state.selectedQuestionnaireId = state.questionnaires[0]?.id || "";
+  } catch {
+    state.questionnaires = [];
+    state.selectedQuestionnaireId = "";
+  }
+}
+
+function saveQuestionnaires() {
+  localStorage.setItem(QUESTIONNAIRES_STORAGE_KEY, JSON.stringify(state.questionnaires));
+}
+
+if (questionnairesWidget) {
+  questionnairesWidget.addEventListener("submit", async (event) => {
+    if (event.target.id !== "questionnaireForm") return;
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const qrFile = formData.get("qrFile");
+    const title = String(formData.get("title") || "").trim();
+    const url = String(formData.get("url") || "").trim();
+
+    if (!title || (!url && !(qrFile instanceof File && qrFile.size > 0))) {
+      setStatus("Agrega nombre y al menos un link o QR del formulario.", "error");
+      return;
+    }
+
+    const questionnaire = {
+      id: `questionnaire-${Date.now()}`,
+      title,
+      purpose: String(formData.get("purpose") || "").trim(),
+      url,
+      qrDataUrl: qrFile instanceof File && qrFile.size > 0 ? await readFileAsDataUrl(qrFile) : "",
+      createdAt: new Date().toISOString(),
+    };
+
+    state.questionnaires = [questionnaire, ...state.questionnaires].slice(0, 30);
+    state.selectedQuestionnaireId = questionnaire.id;
+    saveQuestionnaires();
+    renderQuestionnaires();
+    setStatus("Cuestionario guardado para mostrar al paciente.", "success");
+  });
+
+  questionnairesWidget.addEventListener("change", (event) => {
+    if (event.target.id !== "questionnaireSelect") return;
+    state.selectedQuestionnaireId = event.target.value;
+    renderQuestionnaires();
+  });
+
+  questionnairesWidget.addEventListener("click", (event) => {
+    if (event.target.dataset.questionnaireAction !== "delete") return;
+    const selected = getSelectedQuestionnaire();
+    if (!selected) return;
+    state.questionnaires = state.questionnaires.filter((item) => item.id !== selected.id);
+    state.selectedQuestionnaireId = state.questionnaires[0]?.id || "";
+    saveQuestionnaires();
+    renderQuestionnaires();
+    setStatus("Cuestionario eliminado del listado local.", "success");
+  });
+}
 
 if (importPatientsInput) {
   importPatientsInput.addEventListener("change", importPatientsFromFile);
@@ -4507,6 +5474,7 @@ if (consultationAnalysisWidget) {
 
 async function bootDashboard() {
   syncTopbarOffset();
+  loadQuestionnaires();
   applyWidgetOrder(defaultWidgetOrder);
   applyWidgetSizes({});
   widgetElements.forEach((widget) => resizeObserver.observe(widget));
@@ -4550,5 +5518,8 @@ async function bootDashboard() {
 
 window.addEventListener("resize", syncTopbarOffset);
 window.addEventListener("resize", clampAiDebugWindowPosition);
+window.addEventListener("resize", () => {
+  applyWidgetSizes(state.layoutEditMode ? state.draftWidgetSizes || state.widgetSizes : state.widgetSizes);
+});
 
 bootDashboard();

@@ -53,5 +53,7 @@ export async function loadTrainingManifest({ forceRefresh = false } = {}) {
 export function summarizeActiveModel(manifest) {
   const activeModel = manifest?.activeModel;
   if (!activeModel) return "Modelo IA no cargado";
-  return `${activeModel.name} - ${activeModel.combinedPrecision}%`;
+  const split = manifest?.datasetSplit;
+  const splitLabel = split ? ` | ${split.train}/${split.validation}/${split.test}` : "";
+  return `${activeModel.name} - ${activeModel.combinedPrecision}%${splitLabel}`;
 }

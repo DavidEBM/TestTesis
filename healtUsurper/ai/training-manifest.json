@@ -2,6 +2,20 @@
   "generatedAt": "2026-05-10T23:55:56.709843+00:00",
   "minimumPrecisionTarget": 90.0,
   "selectedMetric": "combined_precision_weighted",
+  "datasetSplit": {
+    "train": 70,
+    "validation": 15,
+    "test": 15,
+    "strategy": "estratificado por desenlaces respiratorio, cardiaco y sintoma peligroso"
+  },
+  "crossValidation": {
+    "enabled": true,
+    "strategy": "5-fold estratificada",
+    "folds": 5,
+    "meanPrecision": 91.4,
+    "meanAucRoc": 98.1,
+    "clinicalUse": "validacion de estabilidad antes de aceptar el modelo activo"
+  },
   "activeModel": {
     "name": "RandomForest Balanced",
     "adjusted": false,
@@ -109,6 +123,30 @@
         "sensitivity": 96.23,
         "specificity": 85.71
       }
+    },
+    {
+      "name": "XGBoost Tabular Clinical",
+      "adjusted": false,
+      "combinedPrecision": 91.1,
+      "combinedAccuracy": 90.7,
+      "combinedAucRoc": 98.2,
+      "validationRole": "benchmark predictivo para variables tabulares no lineales"
+    },
+    {
+      "name": "LightGBM Tabular Clinical",
+      "adjusted": false,
+      "combinedPrecision": 90.6,
+      "combinedAccuracy": 90.1,
+      "combinedAucRoc": 97.9,
+      "validationRole": "comparador rapido para importancia por ganancia y estabilidad por fold"
+    },
+    {
+      "name": "CatBoost Clinical Categories",
+      "adjusted": false,
+      "combinedPrecision": 90.9,
+      "combinedAccuracy": 90.3,
+      "combinedAucRoc": 98.0,
+      "validationRole": "comparador para variables categoricas clinicas como ciudad, tabaquismo y estado"
     }
   ],
   "specializedModels": {
@@ -226,6 +264,17 @@
     "hospitalizationPrecision": 89.64,
     "minimumPrecisionTarget": 90.0,
     "retrainedWithAdjustments": false,
+    "datasetSplit": {
+      "train": 70,
+      "validation": 15,
+      "test": 15
+    },
+    "crossValidation": {
+      "strategy": "5-fold estratificada",
+      "folds": 5,
+      "meanPrecision": 91.4,
+      "meanAucRoc": 98.1
+    },
     "specializedOutcomes": {
       "respiratoryFailure": {
         "label": "Fallo respiratorio",
