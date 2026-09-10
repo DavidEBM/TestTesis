@@ -20,6 +20,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -28,6 +29,10 @@ MINIMUM_PRECISION = 0.90
 RANDOM_STATE = 42
 DEFAULT_ALTITUDE_METERS = 12
 
+TRAIN_RATIO = 0.70
+VALIDATION_RATIO = 0.15
+TEST_RATIO = 0.15
+
 BASE_DIR = Path(__file__).resolve().parent
 PRIMARY_DATASET_PATH = BASE_DIR / "230PatientsCOPD.xlsx"
 SECONDARY_DATASET_PATH = BASE_DIR / "COPD_Patients_Database.xlsx"
@@ -35,6 +40,7 @@ LOCATION_COUNTS_PATH = BASE_DIR / "conteo_locations.csv"
 LOCATION_ELEVATION_PATH = BASE_DIR / "Locations_Elevation.csv"
 OUTPUT_DIR = BASE_DIR.parent / "ai"
 MANIFEST_PATH = OUTPUT_DIR / "training-manifest.json"
+
 TRIAGE_MODEL_PATH = OUTPUT_DIR / "triage-model.joblib"
 HOSPITALIZATION_MODEL_PATH = OUTPUT_DIR / "hospitalization-model.joblib"
 RESPIRATORY_MODEL_PATH = OUTPUT_DIR / "respiratory-failure-model.joblib"
@@ -184,11 +190,15 @@ def load_location_elevations() -> dict[str, int]:
         return {"Barcelona": DEFAULT_ALTITUDE_METERS}
 
     location_df = pd.read_csv(LOCATION_ELEVATION_PATH)
-    first_col = location_df.columns[0]
-    second_col = location_df.columns[1]
+    if len(location_df.columns) < 2:
+        return {"Barcelona": DEFAULT_ALTITUDE_METERS}
+
+    first_col, second_col = location_df.columns[:2]
     return {
         canonical_location_name(location): parse_elevation_meters(elevation)
-        for location, elevation in zip(location_df[first_col], location_df[second_col], strict=False)
+        for location, elevation in zip(
+            location_df[first_col], location_df[second_col], strict=False
+        )
     }
 
 
@@ -233,7 +243,9 @@ def cardiac_failure_risk(row: pd.Series) -> int:
     oxygen = to_float(row.get("Oxygen Saturation"), 0) * 100
     age = to_float(row.get("Age"), 0)
     heart_rate = to_float(row.get("Heart Rate Numeric"), 0)
-    heart_failure = normalize_boolean_text(row.get("History of Heart Failure", "")) == "Si"
+    heart_failure = normalize_boolean_text(
+        row.get("History of Heart Failure", "")
+    ) == "Si"
     bp_risk = to_float(row.get("Blood Pressure Risk"), 0)
     respiratory_rate = to_float(row.get("Respiratory Rate"), 0)
 
@@ -288,43 +300,75 @@ def dangerous_symptom_risk(row: pd.Series) -> int:
     return int(score >= 4)
 
 
-def normalize_source_dataframe(raw_df: pd.DataFrame, source_name: str, elevations: dict[str, int]) -> pd.DataFrame:
+def normalize_source_dataframe(
+    raw_df: pd.DataFrame,
+    source_name: str,
+    elevations: dict[str, int],
+) -> pd.DataFrame:
     df = raw_df.copy()
     df.columns = [str(column).strip() for column in df.columns]
-    df = df.rename(columns={"ID Number": "ID Number", "ID Number\n": "ID Number"})
 
     for column in df.columns:
         if pd.api.types.is_object_dtype(df[column]) or str(df[column].dtype) == "string":
             df[column] = df[column].fillna("sin dato").astype(str).str.strip()
 
     df["sourceDataset"] = source_name
-    df["Location"] = df.get("Location", "Barcelona").fillna("Barcelona").astype(str).str.strip()
+    df["Location"] = (
+        df.get("Location", pd.Series("Barcelona", index=df.index))
+        .fillna("Barcelona")
+        .astype(str)
+        .str.strip()
+    )
     df["LocationNormalized"] = df["Location"].apply(canonical_location_name)
-    df["Altitude"] = df["LocationNormalized"].map(elevations).fillna(DEFAULT_ALTITUDE_METERS).astype(int)
+    df["Altitude"] = (
+        df["LocationNormalized"].map(elevations).fillna(DEFAULT_ALTITUDE_METERS).astype(int)
+    )
     df["LocationRiskLevel"] = df["Location"].apply(parse_location_risk_level)
-    df["SmokingStatusNormalized"] = df.get("status of smoking", "").apply(normalize_smoking_status)
-    df["HeartFailureNormalized"] = df.get("History of Heart Failure", "").apply(normalize_boolean_text)
-    df["Pack History"] = pd.to_numeric(df.get("Pack History", 0), errors="coerce").fillna(0)
-    df["Age"] = pd.to_numeric(df.get("Age", 0), errors="coerce").fillna(0)
-    df["COPD GOLD"] = pd.to_numeric(df.get("COPD GOLD", 0), errors="coerce").fillna(0)
-    df["mMRC"] = pd.to_numeric(df.get("mMRC", 0), errors="coerce").fillna(0)
-    df["Respiratory Rate"] = pd.to_numeric(df.get("Respiratory Rate", 0), errors="coerce").fillna(0)
-    df["Oxygen Saturation"] = pd.to_numeric(df.get("Oxygen Saturation", 0), errors="coerce").fillna(0)
-    df["Heart Rate Numeric"] = df.get("Heart Rate", 0).apply(normalize_heart_rate_value)
-    df["Blood Pressure Risk"] = df.get("Blood pressure", "").apply(normalize_bp_risk)
-    df["Temperature Risk"] = df.get("Temperature", "").apply(normalize_temperature_risk)
-    df["FEV1 Severity"] = df.get("FEV1", "").apply(normalize_fev1_severity)
-    df["BMI Midpoint"] = df.get("BMI, kg/m2", "").apply(parse_bmi_midpoint)
-    df["Working Place Numeric"] = pd.to_numeric(df.get("working place", 0), errors="coerce").fillna(0)
-    df["DependentFlag"] = df.get("Dependent", "").apply(
-        lambda value: 1 if normalize_boolean_text(value) == "Si" else 0
-    )
-    df["DepressionFlag"] = df.get("Depression", "").apply(
-        lambda value: 1 if normalize_boolean_text(value) == "Si" else 0
-    )
-    df["VaccinationFlag"] = df.get("Vaccination", "").apply(
-        lambda value: 1 if normalize_boolean_text(value) == "Si" else 0
-    )
+    df["SmokingStatusNormalized"] = df.get(
+        "status of smoking", pd.Series("", index=df.index)
+    ).apply(normalize_smoking_status)
+    df["HeartFailureNormalized"] = df.get(
+        "History of Heart Failure", pd.Series("", index=df.index)
+    ).apply(normalize_boolean_text)
+
+    numeric_defaults = {
+        "Pack History": 0,
+        "Age": 0,
+        "COPD GOLD": 0,
+        "mMRC": 0,
+        "Respiratory Rate": 0,
+        "Oxygen Saturation": 0,
+    }
+    for column, default in numeric_defaults.items():
+        df[column] = pd.to_numeric(df.get(column, default), errors="coerce").fillna(default)
+
+    df["Heart Rate Numeric"] = df.get(
+        "Heart Rate", pd.Series(0, index=df.index)
+    ).apply(normalize_heart_rate_value)
+    df["Blood Pressure Risk"] = df.get(
+        "Blood pressure", pd.Series("", index=df.index)
+    ).apply(normalize_bp_risk)
+    df["Temperature Risk"] = df.get(
+        "Temperature", pd.Series("", index=df.index)
+    ).apply(normalize_temperature_risk)
+    df["FEV1 Severity"] = df.get(
+        "FEV1", pd.Series("", index=df.index)
+    ).apply(normalize_fev1_severity)
+    df["BMI Midpoint"] = df.get(
+        "BMI, kg/m2", pd.Series("", index=df.index)
+    ).apply(parse_bmi_midpoint)
+    df["Working Place Numeric"] = pd.to_numeric(
+        df.get("working place", pd.Series(0, index=df.index)), errors="coerce"
+    ).fillna(0)
+    df["DependentFlag"] = df.get(
+        "Dependent", pd.Series("", index=df.index)
+    ).apply(lambda value: 1 if normalize_boolean_text(value) == "Si" else 0)
+    df["DepressionFlag"] = df.get(
+        "Depression", pd.Series("", index=df.index)
+    ).apply(lambda value: 1 if normalize_boolean_text(value) == "Si" else 0)
+    df["VaccinationFlag"] = df.get(
+        "Vaccination", pd.Series("", index=df.index)
+    ).apply(lambda value: 1 if normalize_boolean_text(value) == "Si" else 0)
 
     df["Triage"] = df["Oxygen Saturation"].apply(triage)
     df["Hospitalization_Risk"] = df.apply(hospitalization, axis=1)
@@ -340,39 +384,53 @@ def build_dataset() -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int]]:
     elevations = load_location_elevations()
     normalized_frames: list[pd.DataFrame] = []
 
-    for path in [PRIMARY_DATASET_PATH, SECONDARY_DATASET_PATH]:
+    for path in (PRIMARY_DATASET_PATH, SECONDARY_DATASET_PATH):
         if path.exists():
             raw_df = pd.read_excel(path)
-            normalized_frames.append(normalize_source_dataframe(raw_df, path.name, elevations))
+            normalized_frames.append(
+                normalize_source_dataframe(raw_df, path.name, elevations)
+            )
 
     if not normalized_frames:
         raise FileNotFoundError("No se encontraron datasets para entrenamiento.")
 
     df = pd.concat(normalized_frames, ignore_index=True)
-    return df.copy(), df, elevations
+    return df.copy(), df.copy(), elevations
 
 
 def build_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
-    features = df.drop(
-        columns=[
-            "Triage",
-            "Hospitalization_Risk",
-            "Respiratory_Failure_Risk",
-            "Cardiac_Failure_Risk",
-            "Dangerous_Symptom_Risk",
-        ],
+    target_columns = [
+        "Triage",
+        "Hospitalization_Risk",
+        "Respiratory_Failure_Risk",
+        "Cardiac_Failure_Risk",
+        "Dangerous_Symptom_Risk",
+    ]
+    features = df.drop(columns=target_columns, errors="ignore").copy()
+
+    # Identificadores y campos de origen no deben participar como predictores.
+    # Esto evita fuga de informacion y hace comparable el entrenamiento.
+    features = features.drop(
+        columns=["ID Number", "sourceDataset"],
         errors="ignore",
     )
+
     numeric_columns = features.select_dtypes(include=[np.number]).columns.tolist()
-    categorical_columns = [column for column in features.columns if column not in numeric_columns]
+    categorical_columns = [
+        column for column in features.columns if column not in numeric_columns
+    ]
+
     for column in categorical_columns:
         features[column] = features[column].fillna("sin dato").astype(str).str.strip()
+
     return features
 
 
 def build_preprocessor(features: pd.DataFrame) -> ColumnTransformer:
     numeric_columns = features.select_dtypes(include=[np.number]).columns.tolist()
-    categorical_columns = [column for column in features.columns if column not in numeric_columns]
+    categorical_columns = [
+        column for column in features.columns if column not in numeric_columns
+    ]
 
     numeric_transformer = Pipeline(
         steps=[
@@ -383,7 +441,10 @@ def build_preprocessor(features: pd.DataFrame) -> ColumnTransformer:
     categorical_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+            (
+                "encoder",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+            ),
         ]
     )
 
@@ -391,7 +452,8 @@ def build_preprocessor(features: pd.DataFrame) -> ColumnTransformer:
         transformers=[
             ("num", numeric_transformer, numeric_columns),
             ("cat", categorical_transformer, categorical_columns),
-        ]
+        ],
+        remainder="drop",
     )
 
 
@@ -404,9 +466,8 @@ def build_pipeline(features: pd.DataFrame, estimator) -> Pipeline:
     )
 
 
-def compute_specificity_binary(y_true, y_pred, positive_label=1) -> float:
-    labels = sorted(set(pd.Series(y_true).astype(object).tolist()) | {positive_label})
-    matrix = confusion_matrix(y_true, y_pred, labels=labels)
+def compute_specificity_binary(y_true, y_pred) -> float:
+    matrix = confusion_matrix(y_true, y_pred, labels=[0, 1])
     if matrix.shape != (2, 2):
         return 0.0
     tn, fp, _, _ = matrix.ravel()
@@ -433,7 +494,7 @@ def compute_specificity_multiclass(y_true, y_pred, classes) -> float:
 def compute_auc_roc(y_true, probabilities, classes) -> float:
     try:
         if len(classes) == 2:
-            positive_index = 1 if len(classes) > 1 else 0
+            positive_index = list(classes).index(1) if 1 in classes else 1
             return float(roc_auc_score(y_true, probabilities[:, positive_index]))
         return float(
             roc_auc_score(
@@ -449,14 +510,15 @@ def compute_auc_roc(y_true, probabilities, classes) -> float:
 
 
 def score_predictions(y_true, y_pred, probabilities, classes) -> dict[str, float]:
+    binary = len(classes) == 2
     sensitivity = (
         recall_score(y_true, y_pred, pos_label=1, zero_division=0)
-        if len(classes) == 2
+        if binary
         else recall_score(y_true, y_pred, average="macro", zero_division=0)
     )
     specificity = (
-        compute_specificity_binary(y_true, y_pred, positive_label=1)
-        if len(classes) == 2
+        compute_specificity_binary(y_true, y_pred)
+        if binary
         else compute_specificity_multiclass(y_true, y_pred, classes)
     )
 
@@ -475,65 +537,115 @@ def score_predictions(y_true, y_pred, probabilities, classes) -> dict[str, float
     }
 
 
-def train_and_score(
-    model_pipeline: Pipeline, features: pd.DataFrame, target: pd.Series
-) -> tuple[dict[str, float], Pipeline]:
-    stratify_target = target if target.nunique() > 1 else None
-    x_train, x_test, y_train, y_test = train_test_split(
+def stratify_or_none(target: pd.Series):
+    return target if target.nunique() > 1 else None
+
+
+def split_dataset(features: pd.DataFrame, target: pd.Series) -> dict[str, object]:
+    """Create a deterministic 70% train / 15% validation / 15% test split."""
+    x_train, x_temp, y_train, y_temp = train_test_split(
         features,
         target,
-        test_size=0.2,
+        test_size=VALIDATION_RATIO + TEST_RATIO,
         random_state=RANDOM_STATE,
-        stratify=stratify_target,
+        stratify=stratify_or_none(target),
     )
 
-    model_pipeline.fit(x_train, y_train)
-    predictions = model_pipeline.predict(x_test)
-    probabilities = model_pipeline.predict_proba(x_test)
-    classes = list(model_pipeline.named_steps["estimator"].classes_)
+    x_validation, x_test, y_validation, y_test = train_test_split(
+        x_temp,
+        y_temp,
+        test_size=TEST_RATIO / (VALIDATION_RATIO + TEST_RATIO),
+        random_state=RANDOM_STATE,
+        stratify=stratify_or_none(y_temp),
+    )
 
-    return score_predictions(y_test, predictions, probabilities, classes), model_pipeline
+    return {
+        "x_train": x_train,
+        "y_train": y_train,
+        "x_validation": x_validation,
+        "y_validation": y_validation,
+        "x_test": x_test,
+        "y_test": y_test,
+    }
+
+
+def fit_and_score(
+    model_pipeline: Pipeline,
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+    x_eval: pd.DataFrame,
+    y_eval: pd.Series,
+) -> tuple[dict[str, float], Pipeline]:
+    model_pipeline.fit(x_train, y_train)
+    predictions = model_pipeline.predict(x_eval)
+    probabilities = model_pipeline.predict_proba(x_eval)
+    classes = list(model_pipeline.named_steps["estimator"].classes_)
+    return score_predictions(y_eval, predictions, probabilities, classes), model_pipeline
 
 
 def candidate_specs() -> list[dict]:
     return [
         {
             "name": "RandomForest Balanced",
+            "type": "classical",
             "adjusted": False,
             "factory": lambda features: build_pipeline(
                 features,
                 RandomForestClassifier(
-                    n_estimators=280,
+                    n_estimators=320,
                     max_depth=14,
                     min_samples_leaf=1,
                     class_weight="balanced",
                     random_state=RANDOM_STATE,
+                    n_jobs=-1,
                 ),
             ),
         },
         {
             "name": "ExtraTrees Clinical",
+            "type": "classical",
             "adjusted": False,
             "factory": lambda features: build_pipeline(
                 features,
                 ExtraTreesClassifier(
-                    n_estimators=320,
+                    n_estimators=360,
                     max_depth=None,
                     min_samples_leaf=1,
                     class_weight="balanced",
                     random_state=RANDOM_STATE,
+                    n_jobs=-1,
                 ),
             ),
         },
         {
             "name": "LogisticRegression Clinical",
+            "type": "classical",
             "adjusted": False,
             "factory": lambda features: build_pipeline(
                 features,
                 LogisticRegression(
-                    max_iter=3000,
+                    max_iter=4000,
                     class_weight="balanced",
                     solver="lbfgs",
+                    random_state=RANDOM_STATE,
+                ),
+            ),
+        },
+        {
+            "name": "DeepLearning MLP",
+            "type": "deep_learning",
+            "adjusted": False,
+            "factory": lambda features: build_pipeline(
+                features,
+                MLPClassifier(
+                    hidden_layer_sizes=(128, 64, 32),
+                    activation="relu",
+                    solver="adam",
+                    alpha=0.0005,
+                    batch_size=32,
+                    learning_rate_init=0.001,
+                    max_iter=600,
+                    early_stopping=False,
                     random_state=RANDOM_STATE,
                 ),
             ),
@@ -545,6 +657,7 @@ def adjusted_candidate_specs() -> list[dict]:
     return [
         {
             "name": "RandomForest Tuned Retry",
+            "type": "classical",
             "adjusted": True,
             "factory": lambda features: build_pipeline(
                 features,
@@ -555,11 +668,13 @@ def adjusted_candidate_specs() -> list[dict]:
                     min_samples_leaf=1,
                     class_weight="balanced_subsample",
                     random_state=RANDOM_STATE,
+                    n_jobs=-1,
                 ),
             ),
         },
         {
             "name": "ExtraTrees Tuned Retry",
+            "type": "classical",
             "adjusted": True,
             "factory": lambda features: build_pipeline(
                 features,
@@ -570,11 +685,13 @@ def adjusted_candidate_specs() -> list[dict]:
                     min_samples_leaf=1,
                     class_weight="balanced",
                     random_state=RANDOM_STATE,
+                    n_jobs=-1,
                 ),
             ),
         },
         {
             "name": "LogisticRegression Tuned Retry",
+            "type": "classical",
             "adjusted": True,
             "factory": lambda features: build_pipeline(
                 features,
@@ -587,40 +704,140 @@ def adjusted_candidate_specs() -> list[dict]:
                 ),
             ),
         },
+        {
+            "name": "DeepLearning MLP Tuned Retry",
+            "type": "deep_learning",
+            "adjusted": True,
+            "factory": lambda features: build_pipeline(
+                features,
+                MLPClassifier(
+                    hidden_layer_sizes=(192, 96, 48),
+                    activation="relu",
+                    solver="adam",
+                    alpha=0.0003,
+                    batch_size=32,
+                    learning_rate_init=0.0007,
+                    max_iter=800,
+                    early_stopping=False,
+                    random_state=RANDOM_STATE,
+                ),
+            ),
+        },
     ]
 
 
-def evaluate_candidates(features: pd.DataFrame, labels: pd.DataFrame, specs: list[dict]) -> list[dict]:
-    evaluations: list[dict] = []
+def combined_precision(metrics_a: dict, metrics_b: dict) -> float:
+    return float((metrics_a["precision_weighted"] + metrics_b["precision_weighted"]) / 2)
 
-    for spec in specs:
-        triage_metrics, triage_model = train_and_score(spec["factory"](features), features, labels["Triage"])
-        hosp_metrics, hosp_model = train_and_score(
-            spec["factory"](features), features, labels["Hospitalization_Risk"]
-        )
 
-        combined_precision = (
-            triage_metrics["precision_weighted"] + hosp_metrics["precision_weighted"]
-        ) / 2
-        combined_auc = (triage_metrics["auc_roc"] + hosp_metrics["auc_roc"]) / 2
-        combined_accuracy = (triage_metrics["accuracy"] + hosp_metrics["accuracy"]) / 2
+def combined_accuracy(metrics_a: dict, metrics_b: dict) -> float:
+    return float((metrics_a["accuracy"] + metrics_b["accuracy"]) / 2)
 
-        evaluations.append(
-            {
-                "name": spec["name"],
-                "adjusted": spec["adjusted"],
-                "triage": triage_metrics,
-                "hospitalization": hosp_metrics,
-                "combined_precision": float(combined_precision),
-                "combined_auc_roc": float(combined_auc),
-                "combined_accuracy": float(combined_accuracy),
-                "triage_model": triage_model,
-                "hospitalization_model": hosp_model,
-                "factory": spec["factory"],
-            }
-        )
 
-    return evaluations
+def combined_auc(metrics_a: dict, metrics_b: dict) -> float:
+    return float((metrics_a["auc_roc"] + metrics_b["auc_roc"]) / 2)
+
+
+def evaluate_candidate_on_split(
+    spec: dict,
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    split_cache: dict[str, dict],
+) -> dict:
+    """Train on 70%, select on 15% validation, then report the untouched 15% test."""
+    triage_split = split_cache["Triage"]
+    hosp_split = split_cache["Hospitalization_Risk"]
+
+    triage_validation, _ = fit_and_score(
+        spec["factory"](features),
+        triage_split["x_train"],
+        triage_split["y_train"],
+        triage_split["x_validation"],
+        triage_split["y_validation"],
+    )
+    hosp_validation, _ = fit_and_score(
+        spec["factory"](features),
+        hosp_split["x_train"],
+        hosp_split["y_train"],
+        hosp_split["x_validation"],
+        hosp_split["y_validation"],
+    )
+
+    triage_train_val_x = pd.concat([triage_split["x_train"], triage_split["x_validation"]])
+    triage_train_val_y = pd.concat([triage_split["y_train"], triage_split["y_validation"]])
+    hosp_train_val_x = pd.concat([hosp_split["x_train"], hosp_split["x_validation"]])
+    hosp_train_val_y = pd.concat([hosp_split["y_train"], hosp_split["y_validation"]])
+
+    triage_test, _ = fit_and_score(
+        spec["factory"](features),
+        triage_train_val_x,
+        triage_train_val_y,
+        triage_split["x_test"],
+        triage_split["y_test"],
+    )
+    hosp_test, _ = fit_and_score(
+        spec["factory"](features),
+        hosp_train_val_x,
+        hosp_train_val_y,
+        hosp_split["x_test"],
+        hosp_split["y_test"],
+    )
+
+    return {
+        "name": spec["name"],
+        "type": spec["type"],
+        "adjusted": bool(spec["adjusted"]),
+        "factory": spec["factory"],
+        "validation": {
+            "triage": triage_validation,
+            "hospitalization": hosp_validation,
+            "combined_precision": combined_precision(triage_validation, hosp_validation),
+            "combined_accuracy": combined_accuracy(triage_validation, hosp_validation),
+            "combined_auc_roc": combined_auc(triage_validation, hosp_validation),
+        },
+        "test": {
+            "triage": triage_test,
+            "hospitalization": hosp_test,
+            "combined_precision": combined_precision(triage_test, hosp_test),
+            "combined_accuracy": combined_accuracy(triage_test, hosp_test),
+            "combined_auc_roc": combined_auc(triage_test, hosp_test),
+        },
+    }
+
+
+def train_final_models(factory, features: pd.DataFrame, split_cache: dict[str, dict]) -> tuple[Pipeline, Pipeline]:
+    triage_split = split_cache["Triage"]
+    hosp_split = split_cache["Hospitalization_Risk"]
+
+    triage_x = pd.concat([triage_split["x_train"], triage_split["x_validation"]])
+    triage_y = pd.concat([triage_split["y_train"], triage_split["y_validation"]])
+    hosp_x = pd.concat([hosp_split["x_train"], hosp_split["x_validation"]])
+    hosp_y = pd.concat([hosp_split["y_train"], hosp_split["y_validation"]])
+
+    triage_model = factory(features)
+    triage_model.fit(triage_x, triage_y)
+
+    hospitalization_model = factory(features)
+    hospitalization_model.fit(hosp_x, hosp_y)
+
+    return triage_model, hospitalization_model
+
+
+def round_metric_block(metrics: dict[str, float]) -> dict[str, float]:
+    return {key: round(value * 100, 2) for key, value in metrics.items()}
+
+
+def split_summary(split: dict) -> dict[str, object]:
+    total = len(split["y_train"]) + len(split["y_validation"]) + len(split["y_test"])
+    return {
+        "train": len(split["y_train"]),
+        "validation": len(split["y_validation"]),
+        "test": len(split["y_test"]),
+        "total": total,
+        "trainPercent": round(len(split["y_train"]) / total * 100, 2),
+        "validationPercent": round(len(split["y_validation"]) / total * 100, 2),
+        "testPercent": round(len(split["y_test"]) / total * 100, 2),
+    }
 
 
 def heuristic_risk_components(row: pd.Series) -> dict[str, object]:
@@ -640,62 +857,52 @@ def heuristic_risk_components(row: pd.Series) -> dict[str, object]:
     if row.get("Hospitalization_Risk", 0) == 1:
         short_score += 18
         triggers.append("Paciente etiquetado como riesgo de hospitalizacion.")
-
     if oxygen and oxygen < 90:
         short_score += 34
         triggers.append("Saturacion muy por debajo de referencia.")
     elif oxygen and oxygen < 92:
         short_score += 18
         triggers.append("Saturacion en zona de vigilancia.")
-
     if respiratory_rate >= 28:
         short_score += 24
         triggers.append("Frecuencia respiratoria muy alta.")
     elif respiratory_rate >= 24:
         short_score += 14
         triggers.append("Frecuencia respiratoria elevada.")
-
     if heart_rate >= 120:
         short_score += 16
         triggers.append("Pulso muy elevado.")
     elif heart_rate >= 100:
         short_score += 8
         triggers.append("Pulso elevado.")
-
     if gold >= 4:
         short_score += 16
         triggers.append("COPD GOLD 4.")
     elif gold >= 3:
         short_score += 10
         triggers.append("COPD GOLD alto.")
-
     if heart_failure:
         short_score += 10
         triggers.append("Antecedente de falla cardiaca.")
-
     if smoking_status in {"Activo", "Alta carga"}:
         short_score += 8
         triggers.append("Exposicion tabaquica significativa.")
-
     if pack_history >= 60:
         short_score += 8
         triggers.append("Carga tabaquica muy alta.")
     elif pack_history >= 30:
         short_score += 4
-
     if altitude >= 2400 and smoking_status in {"Activo", "Alta carga", "Exfumador"}:
         short_score += 6
         triggers.append("Altitud alta con reserva respiratoria mas exigida.")
 
     short_risk = min(98, round(short_score))
-
     if short_risk >= 70:
         recommendations.append("Agendar control prioritario en menos de 24 horas.")
     elif short_risk >= 45:
         recommendations.append("Programar seguimiento dentro de 48 a 72 horas.")
     else:
         recommendations.append("Mantener seguimiento ordinario.")
-
     if oxygen and oxygen < 92:
         recommendations.append("Verificar signos respiratorios y soporte de oxigeno.")
     if heart_failure:
@@ -716,37 +923,28 @@ def heuristic_risk_components(row: pd.Series) -> dict[str, object]:
 def validate_risk_math(raw_df: pd.DataFrame, dataset_df: pd.DataFrame) -> dict[str, object]:
     validation_df = raw_df.copy()
     validation_df["Hospitalization_Risk"] = dataset_df["Hospitalization_Risk"].values
-
     components = validation_df.apply(heuristic_risk_components, axis=1, result_type="expand")
     validation_df = pd.concat([validation_df, components], axis=1)
 
     high_priority_pred = validation_df["high_priority"].astype(int)
     hospitalization_true = validation_df["Hospitalization_Risk"].astype(int)
     sensitivity = recall_score(hospitalization_true, high_priority_pred, zero_division=0)
-    specificity = compute_specificity_binary(hospitalization_true, high_priority_pred, positive_label=1)
+    specificity = compute_specificity_binary(hospitalization_true, high_priority_pred)
+    try:
+        risk_auc = roc_auc_score(hospitalization_true, validation_df["short_risk"] / 100)
+    except ValueError:
+        risk_auc = 0.0
 
-    risk_auc = roc_auc_score(hospitalization_true, validation_df["short_risk"] / 100)
     monotonic_oxygen = (
-        validation_df[["Oxygen Saturation", "short_risk"]]
-        .dropna()
-        .corr(method="spearman")
-        .iloc[0, 1]
+        validation_df[["Oxygen Saturation", "short_risk"]].dropna().corr(method="spearman").iloc[0, 1]
     )
     monotonic_resp = (
-        validation_df[["Respiratory Rate", "short_risk"]]
-        .dropna()
-        .corr(method="spearman")
-        .iloc[0, 1]
+        validation_df[["Respiratory Rate", "short_risk"]].dropna().corr(method="spearman").iloc[0, 1]
     )
-    recommendation_coverage = float((validation_df["recommendation_count"] > 0).mean())
-    trigger_coverage = float((validation_df["trigger_count"] > 0).mean())
 
     return {
         "validated": True,
-        "summary": (
-            "La matematica heuristica se contrasto contra riesgo de hospitalizacion y relaciones "
-            "esperadas con oxigenacion, frecuencia respiratoria y exigencia por altitud."
-        ),
+        "summary": "La matematica heuristica se contrasto contra riesgo de hospitalizacion y relaciones esperadas con oxigenacion, frecuencia respiratoria y altitud.",
         "hospitalization_alignment": {
             "auc_roc": float(risk_auc),
             "sensitivity": float(sensitivity),
@@ -755,10 +953,6 @@ def validate_risk_math(raw_df: pd.DataFrame, dataset_df: pd.DataFrame) -> dict[s
         "monotonic_checks": {
             "oxygen_vs_risk_spearman": float(monotonic_oxygen),
             "respiratory_rate_vs_risk_spearman": float(monotonic_resp),
-        },
-        "recommendation_checks": {
-            "recommendation_coverage": recommendation_coverage,
-            "trigger_coverage": trigger_coverage,
         },
         "rule_checks": [
             "Menor saturacion debe empujar el riesgo hacia arriba.",
@@ -772,20 +966,19 @@ def validate_risk_math(raw_df: pd.DataFrame, dataset_df: pd.DataFrame) -> dict[s
 def read_location_counts(raw_df: pd.DataFrame) -> dict[str, int]:
     if "LocationNormalized" in raw_df.columns:
         normalized_locations = raw_df["LocationNormalized"].fillna("Barcelona").astype(str).str.strip()
-        if normalized_locations.notna().any():
-            return {
-                str(location).strip(): int(count)
-                for location, count in normalized_locations.value_counts().items()
-            }
+        return {
+            str(location).strip(): int(count)
+            for location, count in normalized_locations.value_counts().items()
+        }
 
     if LOCATION_COUNTS_PATH.exists():
         counts_df = pd.read_csv(LOCATION_COUNTS_PATH)
-        location_col = counts_df.columns[0]
-        count_col = counts_df.columns[1]
-        return {
-            canonical_location_name(location): int(count)
-            for location, count in zip(counts_df[location_col], counts_df[count_col], strict=False)
-        }
+        if len(counts_df.columns) >= 2:
+            location_col, count_col = counts_df.columns[:2]
+            return {
+                canonical_location_name(location): int(count)
+                for location, count in zip(counts_df[location_col], counts_df[count_col], strict=False)
+            }
 
     return {"Barcelona": int(len(raw_df))}
 
@@ -811,13 +1004,7 @@ def sample_rows(raw_df: pd.DataFrame) -> list[str]:
     return rows
 
 
-def build_training_profile(
-    raw_df: pd.DataFrame,
-    dataset_df: pd.DataFrame,
-    selected: dict,
-    elevations: dict[str, int],
-    specialized_models: dict[str, dict],
-) -> dict:
+def build_training_profile(raw_df, dataset_df, selected, elevations, specialized_models) -> dict:
     location_counts = read_location_counts(raw_df)
     oxygen_values = dataset_df["Oxygen Saturation"].astype(float) * 100
     pack_history = pd.to_numeric(dataset_df["Pack History"], errors="coerce").fillna(0)
@@ -830,133 +1017,125 @@ def build_training_profile(
         "locationElevations": elevations,
         "meanAge": float(pd.to_numeric(dataset_df["Age"], errors="coerce").fillna(0).mean()),
         "meanOxygen": float(oxygen_values.mean()),
-        "meanRespRate": float(
-            pd.to_numeric(dataset_df["Respiratory Rate"], errors="coerce").fillna(0).mean()
-        ),
+        "meanRespRate": float(pd.to_numeric(dataset_df["Respiratory Rate"], errors="coerce").fillna(0).mean()),
         "meanPackHistory": float(pack_history.mean()),
         "highPackHistoryRate": float((pack_history >= 40).mean()),
         "meanAltitude": float(pd.to_numeric(dataset_df["Altitude"], errors="coerce").fillna(0).mean()),
         "heartFailureRate": float(
-            (
-                dataset_df["History of Heart Failure"]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .isin(["si", "sí", "sã­", "yes", "true", "1"])
-            ).mean()
+            dataset_df["History of Heart Failure"].astype(str).str.strip().str.lower().isin(["si", "sí", "sã­", "yes", "true", "1"]).mean()
         ),
         "smokingExposureRate": float(
-            dataset_df["status of smoking"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .isin(["active", "activo", "alta carga", "heavy", "3", "3.0", "4", "4.0"])
-            .mean()
+            dataset_df["status of smoking"].astype(str).str.strip().str.lower().isin(["active", "activo", "alta carga", "heavy", "3", "3.0", "4", "4.0"]).mean()
         ),
-        "goldHighRate": float(
-            (pd.to_numeric(dataset_df["COPD GOLD"], errors="coerce").fillna(0) >= 3).mean()
-        ),
+        "goldHighRate": float((pd.to_numeric(dataset_df["COPD GOLD"], errors="coerce").fillna(0) >= 3).mean()),
         "respiratoryFailureRate": float(dataset_df["Respiratory_Failure_Risk"].mean()),
         "cardiacFailureRate": float(dataset_df["Cardiac_Failure_Risk"].mean()),
         "dangerousSymptomRate": float(dataset_df["Dangerous_Symptom_Risk"].mean()),
         "sourceFiles": [PRIMARY_DATASET_PATH.name, SECONDARY_DATASET_PATH.name, LOCATION_ELEVATION_PATH.name],
-        "calibrationMode": "Entrenamiento supervisado offline con seleccion automatica y ajuste por altitud",
+        "calibrationMode": "Entrenamiento supervisado offline con seleccion por validacion y ajuste por altitud",
         "sampleRows": sample_rows(raw_df),
         "selectedModelName": selected["name"],
-        "selectedModelPrecision": round(selected["combined_precision"] * 100, 2),
-        "triagePrecision": round(selected["triage"]["precision_weighted"] * 100, 2),
-        "hospitalizationPrecision": round(
-            selected["hospitalization"]["precision_weighted"] * 100, 2
-        ),
+        "selectedModelPrecision": round(selected["test"]["combined_precision"] * 100, 2),
+        "triagePrecision": round(selected["test"]["triage"]["precision_weighted"] * 100, 2),
+        "hospitalizationPrecision": round(selected["test"]["hospitalization"]["precision_weighted"] * 100, 2),
         "minimumPrecisionTarget": round(MINIMUM_PRECISION * 100, 2),
         "retrainedWithAdjustments": bool(selected["adjusted"]),
         "specializedOutcomes": {
-            outcome_key: {
+            key: {
                 "label": value["label"],
                 "positiveRate": round(value["positive_rate"] * 100, 2),
                 "precision": round(value["metrics"]["precision_weighted"] * 100, 2),
                 "aucRoc": round(value["metrics"]["auc_roc"] * 100, 2),
             }
-            for outcome_key, value in specialized_models.items()
+            for key, value in specialized_models.items()
         },
     }
 
 
-def train_full_model(factory, features: pd.DataFrame, target: pd.Series):
-    model = factory(features)
-    model.fit(features, target)
-    return model
-
-
-def round_metric_block(metrics: dict[str, float]) -> dict[str, float]:
-    return {key: round(value * 100, 2) for key, value in metrics.items()}
-
-
-def build_specialized_models(selected_factory, features: pd.DataFrame, dataset_df: pd.DataFrame) -> dict[str, dict]:
+def build_specialized_models(selected_factory, features, dataset_df) -> dict[str, dict]:
     specialized_targets = {
-        "respiratoryFailure": {
-            "label": "Fallo respiratorio",
-            "column": "Respiratory_Failure_Risk",
-            "artifact_path": RESPIRATORY_MODEL_PATH,
-        },
-        "cardiacFailure": {
-            "label": "Fallo cardiaco",
-            "column": "Cardiac_Failure_Risk",
-            "artifact_path": CARDIAC_MODEL_PATH,
-        },
-        "dangerousSymptom": {
-            "label": "Nuevo sintoma peligroso",
-            "column": "Dangerous_Symptom_Risk",
-            "artifact_path": SYMPTOM_MODEL_PATH,
-        },
+        "respiratoryFailure": {"label": "Fallo respiratorio", "column": "Respiratory_Failure_Risk", "artifact_path": RESPIRATORY_MODEL_PATH},
+        "cardiacFailure": {"label": "Fallo cardiaco", "column": "Cardiac_Failure_Risk", "artifact_path": CARDIAC_MODEL_PATH},
+        "dangerousSymptom": {"label": "Nuevo sintoma peligroso", "column": "Dangerous_Symptom_Risk", "artifact_path": SYMPTOM_MODEL_PATH},
     }
 
-    trained: dict[str, dict] = {}
+    trained = {}
     for key, config in specialized_targets.items():
-        metrics, _ = train_and_score(selected_factory(features), features, dataset_df[config["column"]])
-        model = train_full_model(selected_factory, features, dataset_df[config["column"]])
+        target = dataset_df[config["column"]]
+        split = split_dataset(features, target)
+        train_val_x = pd.concat([split["x_train"], split["x_validation"]])
+        train_val_y = pd.concat([split["y_train"], split["y_validation"]])
+
+        model = selected_factory(features)
+        model.fit(train_val_x, train_val_y)
+        predictions = model.predict(split["x_test"])
+        probabilities = model.predict_proba(split["x_test"])
+        classes = list(model.named_steps["estimator"].classes_)
+        test_metrics = score_predictions(split["y_test"], predictions, probabilities, classes)
         joblib.dump(model, config["artifact_path"])
+
         trained[key] = {
             "label": config["label"],
             "column": config["column"],
-            "metrics": metrics,
-            "positive_rate": float(dataset_df[config["column"]].mean()),
+            "metrics": test_metrics,
+            "test_metrics": test_metrics,
+            "positive_rate": float(target.mean()),
             "artifact": config["artifact_path"].name,
+            "split": split_summary(split),
         }
     return trained
 
 
-def export_manifest(
-    raw_df: pd.DataFrame,
-    dataset_df: pd.DataFrame,
-    selected: dict,
-    candidates: list[dict],
-    elevations: dict[str, int],
-) -> None:
+def export_manifest(raw_df, dataset_df, selected, candidates, split_cache, elevations) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     features = build_feature_frame(dataset_df)
 
-    triage_model = train_full_model(selected["factory"], features, dataset_df["Triage"])
-    hospitalization_model = train_full_model(
-        selected["factory"], features, dataset_df["Hospitalization_Risk"]
-    )
-    specialized_models = build_specialized_models(selected["factory"], features, dataset_df)
-
+    triage_model, hospitalization_model = train_final_models(selected["factory"], features, split_cache)
     joblib.dump(triage_model, TRIAGE_MODEL_PATH)
     joblib.dump(hospitalization_model, HOSPITALIZATION_MODEL_PATH)
+
+    specialized_models = build_specialized_models(selected["factory"], features, dataset_df)
+    split_info = split_summary(split_cache["Triage"])
 
     manifest = {
         "generatedAt": pd.Timestamp.now("UTC").isoformat(),
         "minimumPrecisionTarget": round(MINIMUM_PRECISION * 100, 2),
-        "selectedMetric": "combined_precision_weighted",
+        "selectedMetric": "combined_precision_weighted_validation",
+        "datasetSplit": {
+            "strategy": "single_stratified_70_15_15",
+            "train": TRAIN_RATIO,
+            "validation": VALIDATION_RATIO,
+            "test": TEST_RATIO,
+            "trainPercent": 70,
+            "validationPercent": 15,
+            "testPercent": 15,
+            "trainCount": split_info["train"],
+            "validationCount": split_info["validation"],
+            "testCount": split_info["test"],
+            "total": split_info["total"],
+            "sameRowsForAllModels": True,
+            "testUsedForSelection": False,
+        },
         "activeModel": {
             "name": selected["name"],
+            "type": selected["type"],
             "adjusted": bool(selected["adjusted"]),
-            "combinedPrecision": round(selected["combined_precision"] * 100, 2),
-            "combinedAccuracy": round(selected["combined_accuracy"] * 100, 2),
-            "combinedAucRoc": round(selected["combined_auc_roc"] * 100, 2),
-            "triage": round_metric_block(selected["triage"]),
-            "hospitalization": round_metric_block(selected["hospitalization"]),
+            "selection": {
+                "validationCombinedPrecision": round(selected["validation"]["combined_precision"] * 100, 2),
+                "validationCombinedAccuracy": round(selected["validation"]["combined_accuracy"] * 100, 2),
+                "validationCombinedAucRoc": round(selected["validation"]["combined_auc_roc"] * 100, 2),
+            },
+            "combinedPrecision": round(selected["test"]["combined_precision"] * 100, 2),
+            "combinedAccuracy": round(selected["test"]["combined_accuracy"] * 100, 2),
+            "combinedAucRoc": round(selected["test"]["combined_auc_roc"] * 100, 2),
+            "validation": {
+                "triage": round_metric_block(selected["validation"]["triage"]),
+                "hospitalization": round_metric_block(selected["validation"]["hospitalization"]),
+            },
+            "test": {
+                "triage": round_metric_block(selected["test"]["triage"]),
+                "hospitalization": round_metric_block(selected["test"]["hospitalization"]),
+            },
             "artifacts": {
                 "triageModel": TRIAGE_MODEL_PATH.name,
                 "hospitalizationModel": HOSPITALIZATION_MODEL_PATH.name,
@@ -968,12 +1147,22 @@ def export_manifest(
         "candidateModels": [
             {
                 "name": candidate["name"],
+                "type": candidate["type"],
                 "adjusted": bool(candidate["adjusted"]),
-                "combinedPrecision": round(candidate["combined_precision"] * 100, 2),
-                "combinedAccuracy": round(candidate["combined_accuracy"] * 100, 2),
-                "combinedAucRoc": round(candidate["combined_auc_roc"] * 100, 2),
-                "triage": round_metric_block(candidate["triage"]),
-                "hospitalization": round_metric_block(candidate["hospitalization"]),
+                "validation": {
+                    "combinedPrecision": round(candidate["validation"]["combined_precision"] * 100, 2),
+                    "combinedAccuracy": round(candidate["validation"]["combined_accuracy"] * 100, 2),
+                    "combinedAucRoc": round(candidate["validation"]["combined_auc_roc"] * 100, 2),
+                    "triage": round_metric_block(candidate["validation"]["triage"]),
+                    "hospitalization": round_metric_block(candidate["validation"]["hospitalization"]),
+                },
+                "test": {
+                    "combinedPrecision": round(candidate["test"]["combined_precision"] * 100, 2),
+                    "combinedAccuracy": round(candidate["test"]["combined_accuracy"] * 100, 2),
+                    "combinedAucRoc": round(candidate["test"]["combined_auc_roc"] * 100, 2),
+                    "triage": round_metric_block(candidate["test"]["triage"]),
+                    "hospitalization": round_metric_block(candidate["test"]["hospitalization"]),
+                },
             }
             for candidate in candidates
         ],
@@ -982,20 +1171,16 @@ def export_manifest(
                 "label": value["label"],
                 "artifact": value["artifact"],
                 "positiveRate": round(value["positive_rate"] * 100, 2),
-                "metrics": round_metric_block(value["metrics"]),
+                "metrics": round_metric_block(value["test_metrics"]),
+                "split": value["split"],
             }
             for key, value in specialized_models.items()
         },
         "riskMathValidation": validate_risk_math(raw_df, dataset_df),
-        "trainingProfile": build_training_profile(
-            raw_df, dataset_df, selected, elevations, specialized_models
-        ),
+        "trainingProfile": build_training_profile(raw_df, dataset_df, selected, elevations, specialized_models),
     }
 
-    MANIFEST_PATH.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def main() -> None:
@@ -1003,40 +1188,44 @@ def main() -> None:
     features = build_feature_frame(dataset_df)
     labels = dataset_df[["Triage", "Hospitalization_Risk"]]
 
-    initial_candidates = evaluate_candidates(features, labels, candidate_specs())
-    best_candidate = max(initial_candidates, key=lambda item: item["combined_precision"])
+    # Cada algoritmo usa exactamente la misma particion estratificada y determinista.
+    split_cache = {
+        "Triage": split_dataset(features, labels["Triage"]),
+        "Hospitalization_Risk": split_dataset(features, labels["Hospitalization_Risk"]),
+    }
+
+    initial_candidates = [
+        evaluate_candidate_on_split(spec, features, labels, split_cache)
+        for spec in candidate_specs()
+    ]
+
+    # La seleccion se realiza SOLO con validation. El test permanece ciego.
+    best_candidate = max(initial_candidates, key=lambda item: item["validation"]["combined_precision"])
     all_candidates = list(initial_candidates)
 
-    if best_candidate["combined_precision"] < MINIMUM_PRECISION:
-        retry_candidates = evaluate_candidates(features, labels, adjusted_candidate_specs())
+    if best_candidate["validation"]["combined_precision"] < MINIMUM_PRECISION:
+        retry_candidates = [
+            evaluate_candidate_on_split(spec, features, labels, split_cache)
+            for spec in adjusted_candidate_specs()
+        ]
         all_candidates.extend(retry_candidates)
-        best_candidate = max(all_candidates, key=lambda item: item["combined_precision"])
+        best_candidate = max(all_candidates, key=lambda item: item["validation"]["combined_precision"])
 
-    export_manifest(raw_df, dataset_df, best_candidate, all_candidates, elevations)
+    export_manifest(raw_df, dataset_df, best_candidate, all_candidates, split_cache, elevations)
 
     print("\n============================")
     print("FOXCAT IA TRAINING")
     print("============================\n")
     print(f"Registros combinados: {len(dataset_df)}")
-    print(f"Ciudades detectadas: {', '.join(sorted(read_location_counts(raw_df).keys()))}")
+    print("Division: 70% train / 15% validation / 15% test")
+    print(f"Train: {len(split_cache['Triage']['y_train'])}")
+    print(f"Validation: {len(split_cache['Triage']['y_validation'])}")
+    print(f"Test: {len(split_cache['Triage']['y_test'])}")
     print(f"Modelo activo: {best_candidate['name']}")
-    print(f"Precision combinada: {best_candidate['combined_precision'] * 100:.2f}%")
-    print(f"AUC-ROC combinado: {best_candidate['combined_auc_roc'] * 100:.2f}%")
-    print(f"Precision triage: {best_candidate['triage']['precision_weighted'] * 100:.2f}%")
-    print(f"Sensibilidad triage: {best_candidate['triage']['sensitivity'] * 100:.2f}%")
-    print(f"Especificidad triage: {best_candidate['triage']['specificity'] * 100:.2f}%")
-    print(
-        "Precision hospitalizacion: "
-        f"{best_candidate['hospitalization']['precision_weighted'] * 100:.2f}%"
-    )
-    print(
-        "Sensibilidad hospitalizacion: "
-        f"{best_candidate['hospitalization']['sensitivity'] * 100:.2f}%"
-    )
-    print(
-        "Especificidad hospitalizacion: "
-        f"{best_candidate['hospitalization']['specificity'] * 100:.2f}%"
-    )
+    print(f"Precision combinada TEST: {best_candidate['test']['combined_precision'] * 100:.2f}%")
+    print(f"AUC-ROC combinado TEST: {best_candidate['test']['combined_auc_roc'] * 100:.2f}%")
+    print(f"Precision triage TEST: {best_candidate['test']['triage']['precision_weighted'] * 100:.2f}%")
+    print(f"Precision hospitalizacion TEST: {best_candidate['test']['hospitalization']['precision_weighted'] * 100:.2f}%")
     print(f"Manifest exportado en: {MANIFEST_PATH}")
 
 
